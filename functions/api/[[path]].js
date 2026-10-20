@@ -34,6 +34,8 @@ async function handle(request, env) {
     const name = String(body.username || "").trim(), email = String(body.email || "").trim().toLowerCase(), pw = String(body.password || "");
     if (path.endsWith("register")) {
       if (name.length < 2 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || pw.length < 6) return bad("请填写有效用户名、邮箱，密码至少 6 位");
+      const existing=await env.DB.prepare("SELECT id FROM Users WHERE username=? OR lower(email)=lower(?) LIMIT 1").bind(name,email).first();
+      if(existing)return bad("用户名或邮箱已注册",409);
       try {
         const result = await env.DB.prepare("INSERT INTO Users(username,email,password) VALUES(?,?,?)").bind(name,email,await passwordHash(pw)).run();
         const id = result.meta.last_row_id;
@@ -42,7 +44,10 @@ async function handle(request, env) {
           env.DB.prepare("INSERT INTO PointBalances(user_id,points) VALUES(?,0)").bind(id), env.DB.prepare("INSERT INTO Memberships(user_id) VALUES(?)").bind(id)
         ]);
         body.id = id;
-      } catch { return bad("用户名或邮箱已注册",409); }
+      } catch (e) {
+        if(String(e?.message||e).includes("UNIQUE constraint failed"))return bad("用户名或邮箱已注册",409);
+        throw e;
+      }
     } else {
       const row = await env.DB.prepare("SELECT id,password FROM Users WHERE username=? OR email=?").bind(name,name.toLowerCase()).first();
       if (!row || !(await checkPassword(pw,row.password))) return bad("账号或密码错误",401);
