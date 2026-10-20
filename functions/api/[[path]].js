@@ -164,5 +164,14 @@ async function handle(request, env) {
 }
 export async function onRequest(context) {
   try { return await handle(context.request,context.env); }
-  catch (e) { return json({error:"服务暂时不可用，请检查 Cloudflare D1 配置"},500); }
+  catch (e) {
+    // Keep the response generic, but expose the exception in the Pages Functions logs
+    // so database/schema errors can be diagnosed without leaking details to visitors.
+    console.error("Pages API error", {
+      path: new URL(context.request.url).pathname,
+      message: e?.message || String(e),
+      stack: e?.stack || ""
+    });
+    return json({error:"服务暂时不可用，请检查 Cloudflare D1 配置"},500);
+  }
 }
