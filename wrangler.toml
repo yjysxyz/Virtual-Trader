@@ -5,5 +5,5 @@ pages_build_output_dir = "."
 [[d1_databases]]
 binding = "DB"
 database_name = "qinxing-market"
-database_id = "创建 D1 数据库后替换这里"
+database_id = "53b38b8f-5a0e-44a1-b71a-32263f4c189a"
 migrations_dir = "migrations"
