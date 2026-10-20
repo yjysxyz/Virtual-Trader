@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>溪边垂钓 · 清醒投资</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="recharge.css">
+  <link rel="stylesheet" href="fishing.css?v=return-inside-game-20261020-1">
+</head>
+<body class="fishing-page">
+  <header class="top fishing-top">
+    <a class="brand" href="index.html"><span class="logo">醒</span><span>清醒投资<small>风险教育小游戏</small></span></a>
+    <div class="top-right"><span id="playerName" class="virtual">读取账户中…</span></div>
+  </header>
+  <main class="fishing-main">
+    <section class="fishing-intro">
+      <div class="eyebrow">A QUIET PIXEL FISHING BREAK</div>
+      <h1>溪边垂钓</h1>
+      <p>按住“拉竿”让绿色区域上升，松开让它缓慢下降。把游动的小鱼留在区域里来加快进度。不限时间，进度填满成功；获得进度后若进度退回零，本轮结束。</p>
+    </section>
+    <section class="fishing-game panel">
+      <div class="fishing-account"><span>当前可用虚拟资金</span><b id="fishingCash">读取中…</b></div>
+      <div class="pixel-scene"><canvas id="sceneCanvas" width="640" height="160" aria-label="像素风溪边风景"></canvas><div class="scene-caption">松林溪畔 <span>☀ DAY 01</span></div></div>
+      <div class="game-hud"><span>专注进度</span><div class="progress-track"><i id="progressFill"></i></div><b id="progressText">0%</b><span id="timerText">不限时</span></div>
+      <canvas id="gameCanvas" width="320" height="380" aria-label="钓鱼小游戏水域"></canvas>
+      <div class="game-controls"><button id="startBtn" class="primary full" disabled>正在读取练习状态…</button><button id="holdBtn" class="primary full hidden" disabled>按住拉竿</button></div>
+      <div id="gameMessage" class="game-message">练习次数不限，每次奖励 50–1,000 元虚拟资金。</div>
+      <div id="dailyStatus" class="daily-status"></div>
+      <div class="fishing-gamebar"><a class="outline" href="index.html">← 返回模拟市场</a></div>
+      <div id="victoryOverlay" class="victory-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="victoryTitle">
+        <div class="victory-card">
+          <div class="victory-stars" aria-hidden="true">✦　✧　✦　✧　✦</div>
+          <div class="victory-fish" aria-hidden="true">🐟</div>
+          <h2 id="victoryTitle">钓到鱼啦！</h2>
+          <p id="victoryReward">本轮练习完成</p>
+          <blockquote>“虚拟账户里的回本不是真实收益；亏损后追逐、加码，只会让风险继续扩大。”</blockquote>
+          <button id="victoryContinue" class="primary full">继续练习</button>
+        </div>
+      </div>
+    </section>
+    <section class="fishing-reminder"><b>这次练习的重点是暂停。</b><span>如果你发现自己急着把虚拟资金赚回来，先离开页面休息一下。现实生活中，亏损后不断加码会让风险继续扩大。</span></section>
+  </main>
+  <script src="fishing.js?v=pixel-fishing-20261020-6"></script>
+</body>
+</html>
+

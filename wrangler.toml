@@ -1,0 +1,9 @@
+name = "qinxing-simulated-market"
+compatibility_date = "2026-10-20"
+pages_build_output_dir = "."
+
+[[d1_databases]]
+binding = "DB"
+database_name = "qinxing-market"
+database_id = "创建 D1 数据库后替换这里"
+migrations_dir = "migrations"

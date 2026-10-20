@@ -1,0 +1,10 @@
+server.py
+requirements.txt
+.env
+.env.example
+init.sql
+migrations/
+README.md
+knowledge.db
+market_sim.db
+__pycache__/
