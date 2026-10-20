@@ -4,7 +4,8 @@ const money = n => Number(Number(n || 0).toFixed(2));
 const today = () => new Date().toISOString().slice(0, 10);
 async function passwordHash(password, salt = crypto.getRandomValues(new Uint8Array(16))) {
   const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
-  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", salt, iterations: 120000, hash: "SHA-256" }, key, 256);
+  // Cloudflare Workers Web Crypto currently caps PBKDF2 at 100,000 iterations.
+  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", salt, iterations: 100000, hash: "SHA-256" }, key, 256);
   return `${Array.from(salt, x => x.toString(16).padStart(2, "0")).join("")}$${Array.from(new Uint8Array(bits), x => x.toString(16).padStart(2, "0")).join("")}`;
 }
 async function checkPassword(password, stored) {
