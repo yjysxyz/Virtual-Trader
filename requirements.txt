@@ -1,1 +1,1 @@
-mysql-connector-python>=9.0,<10
+# The local web server uses Python's built-in sqlite3 module; no pip packages are required.

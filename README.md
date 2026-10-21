@@ -2,18 +2,17 @@
 
 一个用于课程展示的模拟炒股与风险教育网站。系统使用虚构行情和虚拟资金，让学生观察冲动交易、频繁买卖和亏损后加码的风险。没有真实证券行情、充值入口、现金兑换或真实交易。
 
-## 连接 MySQL 并启动
+## 本地 SQLite 启动
 
-1. 确认 MySQL 服务已启动，在 MySQL Workbench 或命令行执行 `init.sql`，创建 `market_sim` 数据库。
-2. 将 `.env.example` 复制为 `.env`，填写本机 MySQL 主机、端口、用户名和密码。`.env` 已加入 Git 忽略列表，不会被提交。
-3. 在项目目录安装 Python 依赖并启动：
+本地 Python 网站现在使用 SQLite，数据库保存在项目目录的 `.db` 文件中。Python 自带 `sqlite3`，正常运行不需要安装或启动 MySQL，也不需要额外安装 Python 包。
 
-   ```powershell
-   py -m pip install -r requirements.txt
-   py server.py
-   ```
+```powershell
+py server.py
+```
 
-4. 浏览器打开 <http://localhost:8000>。首次启动时会自动创建 `Users`、`Stocks`、`Accounts`、`Holdings`、`Orders` 五张表。注册的新账户会获得 ¥100,000 虚拟资金。
+浏览器打开 <http://localhost:8000>。首次启动会创建 `market_sim.db` 和所需的数据表；注册的新账户会获得 ¥100,000 虚拟资金。可用 DB Browser for SQLite 打开当前 `.env` 中 `SQLITE_PATH` 指向的文件。
+
+当前本地网站使用 `market_sim_from_mysql.db`，这是从旧 MySQL 数据迁移得到的 SQLite 文件。旧 MySQL 数据库没有被删除；确认 SQLite 网站数据正常后，可自行决定是否保留 MySQL 作为备份。
 
 ## 数据库内容
 
@@ -38,11 +37,11 @@
 
 ## 安全提示
 
-不要把 MySQL 密码写入 `server.py` 或提交到 GitHub。只把本机连接配置填写到 `.env`。如果 MySQL 用户没有建库权限，请用有权限的账号先执行 `init.sql`。
+不要把数据库密码写入 `server.py` 或提交到 GitHub。`.env` 和本机 `.db` 文件已加入 Git 忽略列表。迁移后可继续保留 MySQL 作为备份，确认 SQLite 数据正确前不要删除原库。
 
 ## 管理员股票管理
 
-管理员添加股票时，系统会同时检查股票代码和股票名称是否重复（名称不区分大小写）。管理员可在模拟市场股票列表中删除自定义股票；系统预置股票不会显示删除按钮。为保留交易历史，已有订单或正数持仓的自定义股票不能删除。MySQL 版首次启动会自动添加 `Stocks.is_custom` 字段并标记旧的自定义股票；Cloudflare D1 需依次应用 `migrations/0002_add_admin.sql` 和 `migrations/0003_custom_stocks.sql`。
+管理员添加股票时，系统会同时检查股票代码和股票名称是否重复（名称不区分大小写）。管理员可在模拟市场股票列表中删除自定义股票；系统预置股票不会显示删除按钮。为保留交易历史，已有订单或正数持仓的自定义股票不能删除。SQLite 启动时会自动补齐 `is_admin` 和 `is_custom` 字段；Cloudflare D1 需依次应用 `migrations/0002_add_admin.sql` 和 `migrations/0003_custom_stocks.sql`。
 
 
 ## 本次新增
@@ -53,7 +52,7 @@
 
 ## Cloudflare 免费部署（Pages + Functions + D1）
 
-项目已经包含 `functions/api/[[path]].js` 和 `migrations/0001_initial.sql`，可以把静态前端和 API 部署到 Cloudflare Pages，并把部署版数据放入 Cloudflare D1。Cloudflare 版和本地 Python + MySQL 版是两套运行后端：部署版不会连接你电脑上的 MySQL，也不会自动复制 MySQL 里的用户数据。
+项目已经包含 `functions/api/[[path]].js` 和 `migrations/0001_initial.sql`，可以把静态前端和 API 部署到 Cloudflare Pages，并把部署版数据放入 Cloudflare D1。Cloudflare 版和本地 Python + SQLite 版是两套运行后端：部署版不会连接你电脑上的 SQLite，也不会自动复制本地数据库里的用户数据。
 
 推荐通过 GitHub 仓库连接 Cloudflare Pages。Pages Functions 需要 Git 集成或 Wrangler 部署，控制台直接上传静态文件不适用于本项目的 API Functions。
 
@@ -68,12 +67,12 @@
 
 Cloudflare 免费套餐的 D1 有每日读取、写入量和总存储限额，课程展示规模一般足够；规则可能调整，部署前请查看官方[Workers Paid / Free 计划](https://developers.cloudflare.com/workers/platform/pricing/)和[D1 价格与配额](https://developers.cloudflare.com/d1/platform/pricing/)。Functions 绑定与部署说明见[Pages Functions](https://developers.cloudflare.com/pages/functions/)。
 
-注意：本机 Python 服务仍然使用 `.env` 中的 MySQL 配置；线上 Pages 版本由 D1 绑定提供数据库。不要把 `.env` 或真实数据库密码提交到 GitHub。
+注意：本机 Python 服务使用 `.env` 中 `SQLITE_PATH` 指定的 SQLite 文件；线上 Pages 版本由 D1 绑定提供数据库。不要把 `.env`、本地数据库文件或真实数据库密码提交到 GitHub。
 
 
 ## 管理员添加模拟股票
 
-用户表新增 `is_admin` 管理员标记。服务端启动时会为旧 MySQL 数据库补充该字段；新注册用户默认不是管理员。先在 Navicat 用管理员连接执行下面的 SQL，把用户名替换成需要授权的已注册账号：
+用户表新增 `is_admin` 管理员标记。服务端启动时会为旧 SQLite 数据库补充该字段；新注册用户默认不是管理员。用 DB Browser 打开当前 SQLite 文件，在 Execute SQL 中执行下面语句，把用户名替换成需要授权的已注册账号：
 
 ```sql
 UPDATE Users SET is_admin = 1 WHERE username = '你的管理员用户名';
