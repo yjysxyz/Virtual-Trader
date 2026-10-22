@@ -50,8 +50,8 @@ function finishGame(won){
   active=false;stopInput();cancelAnimationFrame(frame);$('#holdBtn').classList.add('hidden');$('#startBtn').classList.remove('hidden');$('#startBtn').disabled=true;$('#startBtn').textContent='正在结算…';
   const score=Math.max(0,Math.min(100,Math.round(progress*100)));
   api('/api/fishing/catch',{method:'POST',body:JSON.stringify({score})}).then(result=>{
-    if(won){$('#victoryReward').textContent=`专注得分 ${result.score} · 获得 ${money(result.reward)} 虚拟资金`;$('#victoryOverlay').classList.remove('hidden')}
-    else $('#gameMessage').textContent=`小鱼游走了。本轮得分 ${result.score}，获得 ${money(result.reward)} 虚拟资金。`;
+    if(won){$('#victoryTitle').textContent=result.fish.name==='钻石鱼王'?'钓到钻石鱼王！':'钓到鱼啦！';$('.victory-fish').textContent=result.fish.emoji;$('#victoryReward').textContent=`${result.fish.name} · 专注得分 ${result.score} · 获得 ${money(result.reward)} 虚拟资金`;$('#victoryOverlay').classList.remove('hidden')}
+    else $('#gameMessage').textContent=`钓到${result.fish.name}。本轮得分 ${result.score}，获得 ${money(result.reward)} 虚拟资金。`;
   }).catch(error=>{$('#gameMessage').textContent=error.message}).finally(async()=>{
     try{await refreshStatus()}catch(error){$('#gameMessage').textContent=error.message}
     $('#startBtn').classList.remove('hidden');

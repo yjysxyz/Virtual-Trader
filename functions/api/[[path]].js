@@ -78,11 +78,11 @@ async function handle(request, env) {
   if (history && request.method === "GET") return json((await env.DB.prepare("SELECT price,created_at FROM MarketTicks WHERE code=? ORDER BY id DESC LIMIT 80").bind(decodeURIComponent(history[1])).all()).results.reverse());
   if (!uid && ["/api/wallet","/api/portfolio","/api/orders","/api/fishing/status"].includes(path)) return bad("请先登录",401);
   if (path === "/api/wallet" && request.method === "GET") {
-    const [wallet,points,member,history] = await Promise.all([
+    const [wallet,points,member,history,claim] = await Promise.all([
       env.DB.prepare("SELECT balance FROM Wallets WHERE user_id=?").bind(uid).first(),env.DB.prepare("SELECT points FROM PointBalances WHERE user_id=?").bind(uid).first(),
-      env.DB.prepare("SELECT expires_at FROM Memberships WHERE user_id=?").bind(uid).first(),env.DB.prepare("SELECT item_type,item_name,wei_amount,points_added,member_days,created_at FROM RechargeOrders WHERE user_id=? ORDER BY id DESC LIMIT 10").bind(uid).all()
+      env.DB.prepare("SELECT expires_at FROM Memberships WHERE user_id=?").bind(uid).first(),env.DB.prepare("SELECT item_type,item_name,wei_amount,points_added,member_days,created_at FROM RechargeOrders WHERE user_id=? ORDER BY id DESC LIMIT 10").bind(uid).all(),env.DB.prepare("SELECT user_id FROM WalletTopupClaims WHERE user_id=? AND claim_day=?").bind(uid,today()).first()
     ]);
-    return json({balance:wallet.balance,points:points.points,member_expires_at:member.expires_at,history:history.results});
+    return json({balance:wallet.balance,points:points.points,member_expires_at:member.expires_at,topup_available:!claim,history:history.results});
   }
   if (path === "/api/portfolio" && request.method === "GET") {
     const cash=(await env.DB.prepare("SELECT cash FROM Accounts WHERE user_id=?").bind(uid).first()).cash;
@@ -91,6 +91,21 @@ async function handle(request, env) {
     return json({cash,positions,market_value:positions.reduce((a,x)=>a+x.market_value,0),profit:positions.reduce((a,x)=>a+x.profit,0)});
   }
   if (path === "/api/orders" && request.method === "GET") return json((await env.DB.prepare("SELECT o.*,s.name FROM Orders o JOIN Stocks s ON s.code=o.code WHERE user_id=? ORDER BY id DESC LIMIT 30").bind(uid).all()).results);
+  if(path==="/api/farm/status"&&request.method==="GET"){
+    if(!uid)return bad("请先登录",401);const cash=(await env.DB.prepare("SELECT cash FROM Accounts WHERE user_id=?").bind(uid).first()).cash;return json({unlocked:cash<10000,cash});
+  }
+  if(path==="/api/farm"&&request.method==="GET"){
+    if(!uid)return bad("请先登录",401);
+    const cash=(await env.DB.prepare("SELECT cash FROM Accounts WHERE user_id=?").bind(uid).first()).cash;if(cash>=10000)return bad("虚拟资金需低于 ¥10,000 才能进入方块农场",403);const user=await env.DB.prepare("SELECT username FROM Users WHERE id=?").bind(uid).first(),rows=(await env.DB.prepare("SELECT * FROM FarmPlots WHERE user_id=? ORDER BY id").bind(uid).all()).results;
+    const plots=rows.map(p=>{const grow=60-(p.watered?20:0),elapsed=(Date.now()-Date.parse(p.planted_at.replace(" ","T")+"Z"))/1000,ready=elapsed>=grow;return{id:p.id,crop:p.crop,name:["小麦","胡萝卜","南瓜"][p.crop],emoji:["🌾","🥕","🎃"][p.crop],ready,rare:false,watered:!!p.watered,fertilized:!!p.fertilized,remaining:Math.max(0,Math.ceil(grow-elapsed))}});
+    return json({cash,username:user.username,plots});
+  }
+  if(path.startsWith("/api/farm/")&&request.method==="POST"){
+    if(!uid)return bad("请先登录",401);const balance=(await env.DB.prepare("SELECT cash FROM Accounts WHERE user_id=?").bind(uid).first()).cash;if(balance>=10000)return bad("虚拟资金需低于 ¥10,000 才能使用农场",403);const action=path.split("/").pop(),id=Number(body.id);
+    if(action==="plant") {const crop=Number(body.crop),prices=[80,120,180];if(!Number.isInteger(crop)||crop<0||crop>2)return bad("种子无效");const w=await env.DB.prepare("SELECT cash FROM Accounts WHERE user_id=?").bind(uid).first();if(w.cash<prices[crop])return bad("虚拟资金不足");await env.DB.batch([env.DB.prepare("UPDATE Accounts SET cash=cash-? WHERE user_id=?").bind(prices[crop],uid),env.DB.prepare("INSERT INTO FarmPlots(user_id,crop,planted_at) VALUES(?,?,CURRENT_TIMESTAMP)").bind(uid,crop)]);return json({ok:true});}
+    if(["water","fertilize"].includes(action)){const col=action==="water"?"watered":"fertilized";await env.DB.prepare(`UPDATE FarmPlots SET ${col}=1 WHERE id=? AND user_id=?`).bind(id,uid).run();return json({ok:true});}
+    if(action==="harvest"){const p=await env.DB.prepare("SELECT * FROM FarmPlots WHERE id=? AND user_id=?").bind(id,uid).first();if(!p)return bad("地块不存在",404);const grow=60-(p.watered?20:0);if((Date.now()-Date.parse(p.planted_at.replace(" ","T")+"Z"))/1000<grow)return bad("作物尚未成熟，请稍候");const crop=Math.random()<.45?0:Math.random()<.636?1:2,rare=crop<2&&Math.random()<(p.fertilized?0.35:0.08),reward=[160,240,360][crop]*(rare?5:1),name=rare?(crop===0?"金小麦":"金胡萝卜"):["小麦","胡萝卜","南瓜"][crop];await env.DB.batch([env.DB.prepare("UPDATE Accounts SET cash=cash+? WHERE user_id=?").bind(reward,uid),env.DB.prepare("DELETE FROM FarmPlots WHERE id=? AND user_id=?").bind(id,uid)]);return json({ok:true,reward,rare,name});}
+  }
   if (path === "/api/fishing/status" && request.method === "GET") {
     const cash=(await env.DB.prepare("SELECT cash FROM Accounts WHERE user_id=?").bind(uid).first()).cash, row=await env.DB.prepare("SELECT attempts,earned FROM FishingDaily WHERE user_id=? AND day=?").bind(uid,today()).first();
     return json({unlocked:cash<10000,cash,attempts:row?.attempts||0,earned:row?.earned||0,daily_limit:null});
@@ -149,12 +164,28 @@ async function handle(request, env) {
     if(cash>=10000)return bad("余额高于 ¥10,000，恢复小游戏暂未开放。请先暂停交易并复盘。");
     const day=today();await env.DB.prepare("INSERT OR IGNORE INTO FishingDaily(user_id,day) VALUES(?,?)").bind(uid,day).run();
     const daily=await env.DB.prepare("SELECT attempts FROM FishingDaily WHERE user_id=? AND day=?").bind(uid,day).first();
-    const reward=score>=90?1000:score>=70?500:score>=45?200:50;
+    const fishPool=[["溪流鲦","🐟",60],["银鳞鲑","🐠",23],["锦鲤","🎏",12],["金色锦鲤","🐡",4],["钻石鱼王","💎🐟",1]],roll=Math.random()*100;let mark=0,fish=fishPool[0];for(const f of fishPool){mark+=f[2];if(roll<mark){fish=f;break;}}const reward=(score>=90?1000:score>=70?500:score>=45?200:50)*(fish[0]==="钻石鱼王"?5:fish[0]==="金色锦鲤"?2:1);
     await env.DB.batch([env.DB.prepare("UPDATE Accounts SET cash=cash+? WHERE user_id=?").bind(reward,uid),env.DB.prepare("UPDATE FishingDaily SET earned=earned+? WHERE user_id=? AND day=?").bind(reward,uid,day)]);
-    return json({ok:true,reward,score,attempts:daily.attempts,daily_limit:null});
+    return json({ok:true,reward,score,fish:{name:fish[0],emoji:fish[1]},attempts:daily.attempts,daily_limit:null});
   }
   if (path === "/api/reset" && request.method === "POST") {
     await env.DB.batch([env.DB.prepare("UPDATE Accounts SET cash=100000 WHERE user_id=?").bind(uid),env.DB.prepare("DELETE FROM Holdings WHERE user_id=?").bind(uid),env.DB.prepare("DELETE FROM Orders WHERE user_id=?").bind(uid)]);return json({ok:true});
+  }
+  if (path === "/api/wallet/topup" && request.method === "POST") {
+    if (!uid) return bad("请先登录后领取模拟玮元",401);
+    const day=today(),amount=500;
+    if(await env.DB.prepare("SELECT user_id FROM WalletTopupClaims WHERE user_id=? AND claim_day=?").bind(uid,day).first())return bad("今天的虚拟玮元补给已领取，请明天再来",409);
+    try {
+      await env.DB.batch([
+        env.DB.prepare("INSERT INTO WalletTopupClaims(user_id,claim_day) VALUES(?,?)").bind(uid,day),
+        env.DB.prepare("UPDATE Wallets SET balance=balance+? WHERE user_id=?").bind(amount,uid),
+        env.DB.prepare("INSERT INTO RechargeOrders(user_id,item_type,item_name,wei_amount,points_added,member_days) VALUES(?,'wei','每日练习补给',?,0,0)").bind(uid,amount)
+      ]);
+    } catch(e) {
+      if(String(e?.message||e).includes("UNIQUE constraint failed"))return bad("今天的虚拟玮元补给已领取，请明天再来",409);
+      throw e;
+    }
+    return json({ok:true,item_name:"每日练习补给",amount});
   }
   if (path === "/api/recharge" && request.method === "POST") {
     const catalog={points_100:["points","100 积分",100,100,0],points_500:["points","500 积分",500,500,0],points_1000:["points","1000 积分",1000,1000,0],member_7:["member","体验会员 7 天",300,0,7],member_30:["member","体验会员 30 天",1000,0,30],member_90:["member","体验会员 90 天",2000,0,90]},item=catalog[body.package];if(!item)return bad("请选择有效的模拟套餐");

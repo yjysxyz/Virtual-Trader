@@ -41,8 +41,10 @@ def init_db():
   "CREATE TABLE IF NOT EXISTS PointBalances(user_id INTEGER PRIMARY KEY,points INTEGER NOT NULL DEFAULT 0,FOREIGN KEY(user_id) REFERENCES Users(id) ON DELETE CASCADE)",
   "CREATE TABLE IF NOT EXISTS Memberships(user_id INTEGER PRIMARY KEY,expires_at TEXT,FOREIGN KEY(user_id) REFERENCES Users(id) ON DELETE CASCADE)",
   "CREATE TABLE IF NOT EXISTS RechargeOrders(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,item_type TEXT NOT NULL,item_name TEXT NOT NULL,wei_amount NUMERIC NOT NULL,points_added INTEGER NOT NULL DEFAULT 0,member_days INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(user_id) REFERENCES Users(id) ON DELETE CASCADE)",
+  "CREATE TABLE IF NOT EXISTS WalletTopupClaims(user_id INTEGER NOT NULL,claim_day TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(user_id,claim_day),FOREIGN KEY(user_id) REFERENCES Users(id) ON DELETE CASCADE)",
   "CREATE TABLE IF NOT EXISTS MarketTicks(id INTEGER PRIMARY KEY AUTOINCREMENT,code TEXT NOT NULL,price NUMERIC NOT NULL,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(code) REFERENCES Stocks(code) ON DELETE CASCADE)",
-  "CREATE TABLE IF NOT EXISTS FishingDaily(user_id INTEGER NOT NULL,day TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,earned NUMERIC NOT NULL DEFAULT 0,PRIMARY KEY(user_id,day),FOREIGN KEY(user_id) REFERENCES Users(id) ON DELETE CASCADE)"]:
+  "CREATE TABLE IF NOT EXISTS FishingDaily(user_id INTEGER NOT NULL,day TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,earned NUMERIC NOT NULL DEFAULT 0,PRIMARY KEY(user_id,day),FOREIGN KEY(user_id) REFERENCES Users(id) ON DELETE CASCADE)",
+  "CREATE TABLE IF NOT EXISTS FarmPlots(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,crop INTEGER NOT NULL,planted_at TEXT NOT NULL,watered INTEGER NOT NULL DEFAULT 0,fertilized INTEGER NOT NULL DEFAULT 0,FOREIGN KEY(user_id) REFERENCES Users(id) ON DELETE CASCADE)"]:
   c.execute(statement)
  user_columns={r['name'] for r in c.execute('PRAGMA table_info(Users)').fetchall()}
  if 'is_admin' not in user_columns:c.execute('ALTER TABLE Users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0')
@@ -95,8 +97,8 @@ class App(SimpleHTTPRequestHandler):
    a=c.execute('SELECT cash FROM Accounts WHERE user_id=?',(uid,)).fetchone();self.json({**dict(u),'cash':a['cash']});return
   if path=='/api/wallet':
    if not uid:self.json({'error':'请先登录'},401);return
-   wallet=c.execute('SELECT balance FROM Wallets WHERE user_id=?',(uid,)).fetchone();points=c.execute('SELECT points FROM PointBalances WHERE user_id=?',(uid,)).fetchone();member=c.execute('SELECT expires_at FROM Memberships WHERE user_id=?',(uid,)).fetchone();history=c.execute('SELECT item_type,item_name,wei_amount,points_added,member_days,created_at FROM RechargeOrders WHERE user_id=? ORDER BY id DESC LIMIT 10',(uid,)).fetchall()
-   self.json({'balance':wallet['balance'],'points':points['points'],'member_expires_at':member['expires_at'],'history':[dict(x) for x in history]});return
+   wallet=c.execute('SELECT balance FROM Wallets WHERE user_id=?',(uid,)).fetchone();points=c.execute('SELECT points FROM PointBalances WHERE user_id=?',(uid,)).fetchone();member=c.execute('SELECT expires_at FROM Memberships WHERE user_id=?',(uid,)).fetchone();history=c.execute('SELECT item_type,item_name,wei_amount,points_added,member_days,created_at FROM RechargeOrders WHERE user_id=? ORDER BY id DESC LIMIT 10',(uid,)).fetchall();claimed=c.execute('SELECT 1 FROM WalletTopupClaims WHERE user_id=? AND claim_day=?',(uid,date.today())).fetchone()
+   self.json({'balance':wallet['balance'],'points':points['points'],'member_expires_at':member['expires_at'],'topup_available':not bool(claimed),'history':[dict(x) for x in history]});return
   if path=='/api/stocks':
    global last_market_tick
    now=time.time()
@@ -111,6 +113,17 @@ class App(SimpleHTTPRequestHandler):
   if path=='/api/fishing/status':
    if not uid:self.json({'error':'请先登录'},401);return
    cash=c.execute('SELECT cash FROM Accounts WHERE user_id=?',(uid,)).fetchone()['cash'];today=date.today();row=c.execute('SELECT attempts,earned FROM FishingDaily WHERE user_id=? AND day=?',(uid,today)).fetchone();self.json({'unlocked':Decimal(str(cash))<Decimal('10000'),'cash':cash,'attempts':row['attempts'] if row else 0,'earned':row['earned'] if row else 0,'daily_limit':None});return
+  if path=='/api/farm/status':
+   if not uid:self.json({'error':'请先登录'},401);return
+   cash=c.execute('SELECT cash FROM Accounts WHERE user_id=?',(uid,)).fetchone()['cash'];self.json({'unlocked':Decimal(str(cash))<Decimal('10000'),'cash':cash});return
+  if path=='/api/farm':
+   if not uid:self.json({'error':'请先登录'},401);return
+   cash=c.execute('SELECT cash FROM Accounts WHERE user_id=?',(uid,)).fetchone()['cash']
+   if Decimal(str(cash))>=Decimal('10000'):self.json({'error':'虚拟资金需低于 ¥10,000 才能进入方块农场'},403);return
+   plots=[]
+   for p in c.execute('SELECT * FROM FarmPlots WHERE user_id=? ORDER BY id',(uid,)).fetchall():
+    grow=60-(20 if p['watered'] else 0);elapsed=(datetime.now()-datetime.fromisoformat(p['planted_at'])).total_seconds();ready=elapsed>=grow;names=['小麦','胡萝卜','南瓜'];plots.append({'id':p['id'],'name':names[p['crop']],'kind':'wheat' if p['crop']==0 else 'carrot','emoji':['🌾','🥕','🎃'][p['crop']],'ready':ready,'rare':False,'watered':p['watered'],'fertilized':p['fertilized'],'remaining':max(0,int(grow-elapsed))})
+   u=c.execute('SELECT username FROM Users WHERE id=?',(uid,)).fetchone();self.json({'cash':cash,'username':u['username'],'plots':plots});return
   if path=='/api/portfolio':
    if not uid:self.json({'error':'请先登录'},401);return
    cash=c.execute('SELECT cash FROM Accounts WHERE user_id=?',(uid,)).fetchone()['cash'];rows=c.execute('SELECT h.code,s.name,h.quantity,h.avg_cost,s.price FROM Holdings h JOIN Stocks s ON s.code=h.code WHERE h.user_id=? AND h.quantity>0',(uid,)).fetchall();positions=[{**dict(r),'market_value':r['quantity']*r['price'],'profit':(r['price']-r['avg_cost'])*r['quantity']} for r in rows];self.json({'cash':cash,'positions':positions,'market_value':sum(x['market_value'] for x in positions),'profit':sum(x['profit'] for x in positions)});return
@@ -133,6 +146,38 @@ class App(SimpleHTTPRequestHandler):
    t=secrets.token_urlsafe(32);sessions[t]=uid;payload=json.dumps({'ok':True,'token':t}).encode();self.send_response(200);self.send_header('Set-Cookie',f'sid={t}; HttpOnly; SameSite=Lax; Path=/');self.send_header('Content-Type','application/json; charset=utf-8');self.send_header('Cache-Control','no-store');self.send_header('Content-Length',str(len(payload)));self.end_headers();self.wfile.write(payload);return
   if path=='/api/logout':
    sessions.pop(self.session_token(),None);self.send_response(200);self.send_header('Set-Cookie','sid=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax');self.end_headers();return
+  if path.startswith('/api/farm/'):
+   uid=self.user()
+   if not uid:self.json({'error':'请先登录'},401);return
+   cash=c.execute('SELECT cash FROM Accounts WHERE user_id=?',(uid,)).fetchone()['cash']
+   if Decimal(str(cash))>=Decimal('10000'):self.json({'error':'虚拟资金需低于 ¥10,000 才能使用农场'},403);return
+   action=path.rsplit('/',1)[-1];pid=d.get('id')
+   if action=='plant':
+    crop=d.get('crop');prices=[80,120,180]
+    if not isinstance(crop,int) or crop not in range(3):self.json({'error':'种子无效'},400);return
+    cost=prices[crop];cash=c.execute('SELECT cash FROM Accounts WHERE user_id=?',(uid,)).fetchone()['cash']
+    if cash<cost:self.json({'error':'虚拟资金不足'},400);return
+    c.execute('UPDATE Accounts SET cash=cash-? WHERE user_id=?',(cost,uid));c.execute('INSERT INTO FarmPlots(user_id,crop,planted_at) VALUES(?,?,?)',(uid,crop,datetime.now().isoformat()));c.commit();self.json({'ok':True});return
+   if action in ('water','fertilize'):
+    col='watered' if action=='water' else 'fertilized';c.execute(f'UPDATE FarmPlots SET {col}=1 WHERE id=? AND user_id=?',(pid,uid));c.commit();self.json({'ok':True});return
+   if action=='harvest':
+    p=c.execute('SELECT * FROM FarmPlots WHERE id=? AND user_id=?',(pid,uid)).fetchone()
+    if not p:self.json({'error':'地块不存在'},404);return
+    grow=60-(20 if p['watered'] else 0)
+    if (datetime.now()-datetime.fromisoformat(p['planted_at'])).total_seconds()<grow:self.json({'error':'作物尚未成熟，请稍候'},400);return
+    crop=random.choices([0,1,2],[45,35,20])[0];rare=crop<2 and random.random()<(0.35 if p['fertilized'] else 0.08);reward=[160,240,360][crop]*(5 if rare else 1);name=('金小麦' if crop==0 else '金胡萝卜') if rare else ['小麦','胡萝卜','南瓜'][crop];c.execute('UPDATE Accounts SET cash=cash+? WHERE user_id=?',(reward,uid));c.execute('DELETE FROM FarmPlots WHERE id=?',(pid,));c.commit();self.json({'ok':True,'reward':reward,'rare':rare,'name':name});return
+  if path=='/api/wallet/topup':
+   uid=self.user()
+   if not uid:self.json({'error':'请先登录后领取模拟玮元'},401);return
+   today=date.today()
+   try:
+    c.execute('INSERT INTO WalletTopupClaims(user_id,claim_day) VALUES(?,?)',(uid,today))
+    c.execute('UPDATE Wallets SET balance=balance+500 WHERE user_id=?',(uid,))
+    c.execute("INSERT INTO RechargeOrders(user_id,item_type,item_name,wei_amount,points_added,member_days) VALUES(?,'wei','每日练习补给',500,0,0)",(uid,))
+    c.commit()
+   except IntegrityError:
+    c.connection.rollback();self.json({'error':'今天的虚拟玮元补给已领取，请明天再来'},409);return
+   self.json({'ok':True,'item_name':'每日练习补给','amount':500});return
   if path=='/api/recharge':
    uid=self.user()
    if not uid:self.json({'error':'请先登录后使用玮元'},401);return
@@ -206,8 +251,8 @@ class App(SimpleHTTPRequestHandler):
    cash=c.execute('SELECT cash FROM Accounts WHERE user_id=?',(uid,)).fetchone()['cash']
    if Decimal(str(cash))>=Decimal('10000'):self.json({'error':'余额高于 ¥10,000，恢复小游戏暂未开放。请先暂停交易并复盘。'},400);return
    today=date.today();c.execute('INSERT OR IGNORE INTO FishingDaily(user_id,day) VALUES(?,?)',(uid,today));daily=c.execute('SELECT attempts,earned FROM FishingDaily WHERE user_id=? AND day=?',(uid,today)).fetchone()
-   reward=1000 if score>=90 else 500 if score>=70 else 200 if score>=45 else 50
-   c.execute('UPDATE Accounts SET cash=cash+? WHERE user_id=?',(reward,uid));c.execute('UPDATE FishingDaily SET earned=earned+? WHERE user_id=? AND day=?',(reward,uid,today));c.commit();self.json({'ok':True,'reward':reward,'score':score,'attempts':daily['attempts'],'daily_limit':None});return
+   fish=random.choices([('溪流鲦','🐟'),('银鳞鲑','🐠'),('锦鲤','🎏'),('金色锦鲤','🐡'),('钻石鱼王','💎🐟')],[60,23,12,4,1])[0];reward=(1000 if score>=90 else 500 if score>=70 else 200 if score>=45 else 50)*(5 if fish[0]=='钻石鱼王' else 2 if fish[0]=='金色锦鲤' else 1)
+   c.execute('UPDATE Accounts SET cash=cash+? WHERE user_id=?',(reward,uid));c.execute('UPDATE FishingDaily SET earned=earned+? WHERE user_id=? AND day=?',(reward,uid,today));c.commit();self.json({'ok':True,'reward':reward,'score':score,'fish':{'name':fish[0],'emoji':fish[1]},'attempts':daily['attempts'],'daily_limit':None});return
   self.json({'error':'Not found'},404)
 if __name__=='__main__':
  init_db();print('模拟股市风险教育站运行于 http://localhost:8000');ThreadingHTTPServer(('127.0.0.1',8000),App).serve_forever()
