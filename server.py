@@ -1,4 +1,4 @@
-"""清醒投资 · 模拟市场 —— 本地 Python + SQLite 后端。
+"""虚拟交易 · 模拟市场 —— 本地 Python + SQLite 后端。
 
 仅用于课程演示：行情、资金、玮元、积分与会员全部为虚构数据，
 没有真实行情、真实支付或现金兑换。
@@ -331,11 +331,11 @@ def send_email_code(email, code):
     api_key = os.getenv('RESEND_API_KEY', '').strip()
     if not api_key:
         raise RuntimeError('未配置 RESEND_API_KEY，暂时无法发送验证码')
-    sender = os.getenv('MAIL_FROM', '清醒投资 <no-reply@virtualtrader123.xyz>').strip()
+    sender = os.getenv('MAIL_FROM', '虚拟交易 <no-reply@virtualtrader123.xyz>').strip()
     payload = {
         'from': sender,
         'to': [email],
-        'subject': '【清醒投资】邮箱验证码',
+        'subject': '【虚拟交易】邮箱验证码',
         'text': f'你的验证码是 {code}，5 分钟内有效。\n如果不是你本人操作，请忽略这封邮件。',
     }
     request = urllib.request.Request(
@@ -641,7 +641,7 @@ class App(SimpleHTTPRequestHandler):
         body = (
             '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1">'
-            '<title>页面不存在 · 清醒投资</title></head>'
+            '<title>页面不存在 · 虚拟交易</title></head>'
             '<body style="font-family:system-ui,-apple-system,\'Segoe UI\',sans-serif;'
             'max-width:640px;margin:60px auto;padding:0 20px;line-height:1.8;color:#222d29">'
             '<h1 style="font-size:22px">这个地址不是站点页面</h1>'
@@ -1580,7 +1580,7 @@ def main():
         port = 8000
     server = ThreadingHTTPServer((host, port), App)
     server.daemon_threads = True
-    print(f'清醒投资 · 模拟市场已启动：http://{host}:{port}', flush=True)
+    print(f'虚拟交易 · 模拟市场已启动：http://{host}:{port}', flush=True)
     print(f'数据库：{db_path()}', flush=True)
     print('入口：/（模拟市场）、/fishing.html（钓鱼）、/mining.html（挖矿）、/forge.html（锻剑）', flush=True)
     if host not in ('127.0.0.1', 'localhost', '::1'):

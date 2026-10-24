@@ -1,4 +1,4 @@
-// 清醒投资 · 模拟市场 —— Cloudflare Pages Functions + D1 后端。
+// 虚拟交易 · 模拟市场 —— Cloudflare Pages Functions + D1 后端。
 // 与本地 server.py 保持同一套接口、鉴权规则和数据结构；所有金额均为虚拟演示数据。
 
 const SECURITY_HEADERS = {
@@ -155,7 +155,7 @@ async function sendEmailCode(env, email, code) {
     return;
   }
   if (!env.RESEND_API_KEY) throw new Error("未配置 RESEND_API_KEY，暂时无法发送验证码");
-  const from = env.MAIL_FROM || "清醒投资 <no-reply@virtualtrader123.xyz>";
+  const from = env.MAIL_FROM || "虚拟交易 <no-reply@virtualtrader123.xyz>";
   const response = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
@@ -167,7 +167,7 @@ async function sendEmailCode(env, email, code) {
     body: JSON.stringify({
       from,
       to: [email],
-      subject: "【清醒投资】邮箱验证码",
+      subject: "【虚拟交易】邮箱验证码",
       text: `你的验证码是 ${code}，5 分钟内有效。\n如果不是你本人操作，请忽略这封邮件。`,
     }),
   });

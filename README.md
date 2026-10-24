@@ -1,4 +1,4 @@
-# 清醒投资 · 模拟市场
+# 虚拟交易 · 模拟市场
 
 一个用于课程展示的模拟炒股与风险教育网站。系统使用虚构行情和虚拟资金，让学生观察冲动交易、频繁买卖和亏损后加码的风险。没有真实证券行情、充值入口、现金兑换或真实交易。
 
@@ -56,7 +56,7 @@ py server.py
 
 ```text
 RESEND_API_KEY=re_xxxxxxxx
-MAIL_FROM=清醒投资 <no-reply@virtualtrader123.xyz>
+MAIL_FROM=虚拟交易 <no-reply@virtualtrader123.xyz>
 EMAIL_CODE_SECRET=随机长字符串
 EMAIL_DRY_RUN=0
 ```
