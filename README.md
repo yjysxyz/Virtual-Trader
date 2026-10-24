@@ -159,7 +159,7 @@ Cloudflare D1 需依次应用 `migrations/0001` 至 `migrations/0010`；授权�
 5. 将项目提交到 GitHub。在 Cloudflare Pages 创建项目并连接仓库，框架选择 None，构建命令留空，输出目录填写 `.`。
 6. 部署完成后用 Pages 给出的 `https://...pages.dev` 地址注册测试。所有 Cloudflare 版数据将保存在 D1。
 
-`wrangler.toml` 的 `name` 是 Pages 项目名，必须与 Cloudflare 控制台中的项目名一致（当前为 `Virtual-Trader`）。
+`wrangler.toml` 的 `name` 是 Pages 项目名，必须与 Cloudflare 控制台中的项目名一致（当前为 `virtual-trader`）。
 
 Cloudflare 免费套餐的 D1 有每日读取、写入量和总存储限额，课程展示规模一般足够；规则可能调整，部署前请查看官方 [Workers 计划](https://developers.cloudflare.com/workers/platform/pricing/)和 [D1 价格与配额](https://developers.cloudflare.com/d1/platform/pricing/)。Functions 绑定与部署说明见 [Pages Functions](https://developers.cloudflare.com/pages/functions/)。
 
