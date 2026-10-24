@@ -416,6 +416,11 @@ def forge_risk(hits):
     return FORGE_BASE_SHATTER + (FORGE_MAX_SHATTER - FORGE_BASE_SHATTER) * (progress ** 2)
 
 
+def is_admin_user(c, uid):
+    row = c.execute('SELECT is_admin FROM Users WHERE id=?', (uid,)).fetchone()
+    return bool(row and row['is_admin'])
+
+
 def init_db():
     """建表、补列、写入种子数据、清理过期会话与过长行情历史。"""
     c = db()
@@ -786,11 +791,12 @@ class App(SimpleHTTPRequestHandler):
                 'SELECT 1 FROM WalletTopupClaims WHERE user_id=? AND claim_day=?',
                 (uid, today_local()),
             ).fetchone()
+            admin = is_admin_user(c, uid)
             self.send_json({
                 'balance': money(wallet['balance']) if wallet else 0,
                 'points': points['points'] if points else 0,
                 'member_expires_at': iso_z(member['expires_at']) if member else None,
-                'topup_available': not bool(claimed),
+                'topup_available': admin or not bool(claimed),
                 'history': [
                     {**dict(item), 'created_at': iso_z(item['created_at'])} for item in history
                 ],
@@ -825,12 +831,13 @@ class App(SimpleHTTPRequestHandler):
                 return
             account = c.execute('SELECT cash FROM Accounts WHERE user_id=?', (uid,)).fetchone()
             cash = Decimal(str(account['cash'])) if account else Decimal('0')
+            admin = is_admin_user(c, uid)
             row = c.execute(
                 'SELECT attempts,earned FROM FishingDaily WHERE user_id=? AND day=?',
                 (uid, today_local()),
             ).fetchone()
             self.send_json({
-                'unlocked': cash < FISHING_UNLOCK_CASH,
+                'unlocked': admin or cash < FISHING_UNLOCK_CASH,
                 'cash': money(cash),
                 'attempts': row['attempts'] if row else 0,
                 'earned': money(row['earned']) if row else 0,
@@ -844,12 +851,13 @@ class App(SimpleHTTPRequestHandler):
                 return
             account = c.execute('SELECT cash FROM Accounts WHERE user_id=?', (uid,)).fetchone()
             cash = Decimal(str(account['cash'])) if account else Decimal('0')
+            admin = is_admin_user(c, uid)
             game = 'mining' if path.startswith('/api/mining') else 'forge'
             stats = c.execute(
                 'SELECT runs,earned FROM GameStats WHERE user_id=? AND game=?', (uid, game)
             ).fetchone()
             payload = {
-                'unlocked': cash < GAME_UNLOCK_CASH,
+                'unlocked': admin or cash < GAME_UNLOCK_CASH,
                 'cash': money(cash),
                 'runs': stats['runs'] if stats else 0,
                 'earned': money(stats['earned']) if stats else 0,
@@ -1102,11 +1110,13 @@ class App(SimpleHTTPRequestHandler):
             return
 
         if path == '/api/wallet/topup':
+            admin = is_admin_user(c, uid)
             try:
-                c.execute(
-                    'INSERT INTO WalletTopupClaims(user_id,claim_day) VALUES(?,?)',
-                    (uid, today_local()),
-                )
+                if not admin:
+                    c.execute(
+                        'INSERT INTO WalletTopupClaims(user_id,claim_day) VALUES(?,?)',
+                        (uid, today_local()),
+                    )
                 c.execute('UPDATE Wallets SET balance=balance+500 WHERE user_id=?', (uid,))
                 c.execute(
                     "INSERT INTO RechargeOrders(user_id,item_type,item_name,wei_amount,points_added,member_days) "
@@ -1285,7 +1295,7 @@ class App(SimpleHTTPRequestHandler):
         if path == '/api/fishing/start':
             account = c.execute('SELECT cash FROM Accounts WHERE user_id=?', (uid,)).fetchone()
             cash = Decimal(str(account['cash'])) if account else Decimal('0')
-            if cash >= FISHING_UNLOCK_CASH:
+            if not is_admin_user(c, uid) and cash >= FISHING_UNLOCK_CASH:
                 self.send_json({'error': '虚拟现金需低于 ¥10,000 才能开始练习'}, 400)
                 return
             c.execute('INSERT OR IGNORE INTO FishingDaily(user_id,day) VALUES(?,?)', (uid, today_local()))
@@ -1308,7 +1318,7 @@ class App(SimpleHTTPRequestHandler):
                 score = 0
             account = c.execute('SELECT cash FROM Accounts WHERE user_id=?', (uid,)).fetchone()
             cash = Decimal(str(account['cash'])) if account else Decimal('0')
-            if cash >= FISHING_UNLOCK_CASH:
+            if not is_admin_user(c, uid) and cash >= FISHING_UNLOCK_CASH:
                 self.send_json({'error': '余额高于 ¥10,000，恢复小游戏暂未开放。请先暂停交易并复盘。'}, 400)
                 return
             row = c.execute(
@@ -1364,7 +1374,7 @@ class App(SimpleHTTPRequestHandler):
         if path == '/api/mining/start':
             account = c.execute('SELECT cash FROM Accounts WHERE user_id=?', (uid,)).fetchone()
             cash = Decimal(str(account['cash'])) if account else Decimal('0')
-            if cash >= GAME_UNLOCK_CASH:
+            if not is_admin_user(c, uid) and cash >= GAME_UNLOCK_CASH:
                 self.send_json({'error': '虚拟资金需低于 ¥10,000 才能进入矿场'}, 403)
                 return
             c.execute(
@@ -1462,7 +1472,7 @@ class App(SimpleHTTPRequestHandler):
         if path == '/api/forge/start':
             account = c.execute('SELECT cash FROM Accounts WHERE user_id=?', (uid,)).fetchone()
             cash = Decimal(str(account['cash'])) if account else Decimal('0')
-            if cash >= GAME_UNLOCK_CASH:
+            if not is_admin_user(c, uid) and cash >= GAME_UNLOCK_CASH:
                 self.send_json({'error': '虚拟资金需低于 ¥10,000 才能进入锻剑工坊'}, 403)
                 return
             c.execute(

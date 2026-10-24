@@ -52,6 +52,10 @@ const forgeRisk = (hits) => {
   const progress = Math.min(1, Math.max(0, Number(hits || 0)) / FORGE_RISK_TARGET_HITS);
   return FORGE_BASE_SHATTER + (FORGE_MAX_SHATTER - FORGE_BASE_SHATTER) * progress * progress;
 };
+const isAdmin = async (env, uid) => {
+  const row = await env.DB.prepare("SELECT is_admin FROM Users WHERE id=?").bind(uid).first();
+  return Boolean(row?.is_admin);
+};
 
 const DEFAULT_CASH = 100000;
 const DEFAULT_WEI = 2000;
@@ -364,7 +368,7 @@ async function handle(request, env) {
   if (!uid) return bad("请先登录", 401);
 
   if (path === "/api/wallet" && method === "GET") {
-    const [wallet, points, member, historyRows, claim] = await Promise.all([
+    const [wallet, points, member, historyRows, claim, admin] = await Promise.all([
       env.DB.prepare("SELECT balance FROM Wallets WHERE user_id=?").bind(uid).first(),
       env.DB.prepare("SELECT points FROM PointBalances WHERE user_id=?").bind(uid).first(),
       env.DB.prepare("SELECT expires_at FROM Memberships WHERE user_id=?").bind(uid).first(),
@@ -375,12 +379,13 @@ async function handle(request, env) {
         .bind(uid)
         .all(),
       env.DB.prepare("SELECT user_id FROM WalletTopupClaims WHERE user_id=? AND claim_day=?").bind(uid, todayLocal()).first(),
+      isAdmin(env, uid),
     ]);
     return json({
       balance: money(wallet?.balance),
       points: points?.points || 0,
       member_expires_at: isoZ(member?.expires_at),
-      topup_available: !claim,
+      topup_available: admin || !claim,
       history: historyRows.results.map((row) => ({ ...row, created_at: isoZ(row.created_at) })),
     });
   }
@@ -420,6 +425,7 @@ async function handle(request, env) {
   if ((path === "/api/mining/status" || path === "/api/forge/status") && method === "GET") {
     const account = await env.DB.prepare("SELECT cash FROM Accounts WHERE user_id=?").bind(uid).first();
     const cash = Number(account?.cash || 0);
+    const admin = await isAdmin(env, uid);
     const game = path.startsWith("/api/mining") ? "mining" : "forge";
     const stats = await env.DB.prepare("SELECT runs,earned FROM GameStats WHERE user_id=? AND game=?")
       .bind(uid, game)
@@ -447,7 +453,7 @@ async function handle(request, env) {
       }
     }
     return json({
-      unlocked: cash < GAME_UNLOCK_CASH,
+      unlocked: admin || cash < GAME_UNLOCK_CASH,
       cash: money(cash),
       runs: stats?.runs || 0,
       earned: money(stats?.earned),
@@ -457,7 +463,7 @@ async function handle(request, env) {
 
   if (path === "/api/mining/start" && method === "POST") {
     const account = await env.DB.prepare("SELECT cash FROM Accounts WHERE user_id=?").bind(uid).first();
-    if (Number(account?.cash || 0) >= GAME_UNLOCK_CASH) return bad("虚拟资金需低于 ¥10,000 才能进入矿场", 403);
+    if (!(await isAdmin(env, uid)) && Number(account?.cash || 0) >= GAME_UNLOCK_CASH) return bad("虚拟资金需低于 ¥10,000 才能进入矿场", 403);
     await env.DB.batch([
       env.DB.prepare("UPDATE MiningRuns SET status='abandoned',ended_at=CURRENT_TIMESTAMP WHERE user_id=? AND status='active'").bind(uid),
       env.DB.prepare("INSERT INTO MiningRuns(user_id,pot,digs) VALUES(?,0,0)").bind(uid),
@@ -538,7 +544,7 @@ async function handle(request, env) {
 
   if (path === "/api/forge/start" && method === "POST") {
     const account = await env.DB.prepare("SELECT cash FROM Accounts WHERE user_id=?").bind(uid).first();
-    if (Number(account?.cash || 0) >= GAME_UNLOCK_CASH) return bad("虚拟资金需低于 ¥10,000 才能进入锻剑工坊", 403);
+    if (!(await isAdmin(env, uid)) && Number(account?.cash || 0) >= GAME_UNLOCK_CASH) return bad("虚拟资金需低于 ¥10,000 才能进入锻剑工坊", 403);
     await env.DB.batch([
       env.DB.prepare("UPDATE ForgeRuns SET status='abandoned',ended_at=CURRENT_TIMESTAMP WHERE user_id=? AND status='active'").bind(uid),
       env.DB.prepare("INSERT INTO ForgeRuns(user_id,value,hits,risk) VALUES(?,0,0,?)").bind(uid, FORGE_BASE_SHATTER),
@@ -615,11 +621,12 @@ async function handle(request, env) {
   if (path === "/api/fishing/status" && method === "GET") {
     const account = await env.DB.prepare("SELECT cash FROM Accounts WHERE user_id=?").bind(uid).first();
     const cash = Number(account?.cash || 0);
+    const admin = await isAdmin(env, uid);
     const row = await env.DB.prepare("SELECT attempts,earned FROM FishingDaily WHERE user_id=? AND day=?")
       .bind(uid, todayLocal())
       .first();
     return json({
-      unlocked: cash < FISHING_UNLOCK_CASH,
+      unlocked: admin || cash < FISHING_UNLOCK_CASH,
       cash: money(cash),
       attempts: row?.attempts || 0,
       earned: money(row?.earned),
@@ -629,7 +636,7 @@ async function handle(request, env) {
 
   if (path === "/api/fishing/start" && method === "POST") {
     const account = await env.DB.prepare("SELECT cash FROM Accounts WHERE user_id=?").bind(uid).first();
-    if (Number(account?.cash || 0) >= FISHING_UNLOCK_CASH) return bad("虚拟现金需低于 ¥10,000 才能开始练习");
+    if (!(await isAdmin(env, uid)) && Number(account?.cash || 0) >= FISHING_UNLOCK_CASH) return bad("虚拟现金需低于 ¥10,000 才能开始练习");
     const day = todayLocal();
     await env.DB.prepare("INSERT OR IGNORE INTO FishingDaily(user_id,day) VALUES(?,?)").bind(uid, day).run();
     await env.DB.prepare(
@@ -646,7 +653,7 @@ async function handle(request, env) {
   if (path === "/api/fishing/catch" && method === "POST") {
     let score = Math.max(0, Math.min(100, Number(body.score) || 0));
     const account = await env.DB.prepare("SELECT cash FROM Accounts WHERE user_id=?").bind(uid).first();
-    if (Number(account?.cash || 0) >= FISHING_UNLOCK_CASH) {
+    if (!(await isAdmin(env, uid)) && Number(account?.cash || 0) >= FISHING_UNLOCK_CASH) {
       return bad("余额高于 ¥10,000，恢复小游戏暂未开放。请先暂停交易并复盘。");
     }
     const day = todayLocal();
@@ -803,18 +810,25 @@ async function handle(request, env) {
 
   if (path === "/api/wallet/topup" && method === "POST") {
     const day = todayLocal();
-    if (await env.DB.prepare("SELECT user_id FROM WalletTopupClaims WHERE user_id=? AND claim_day=?").bind(uid, day).first()) {
-      return bad("今天的虚拟玮元补给已领取，请明天再来", 409);
+    const admin = await isAdmin(env, uid);
+    if (!admin) {
+      const claimed = await env.DB.prepare("SELECT user_id FROM WalletTopupClaims WHERE user_id=? AND claim_day=?")
+        .bind(uid, day)
+        .first();
+      if (claimed) return bad("今天的虚拟玮元补给已领取，请明天再来", 409);
+    }
+    const statements = [
+      env.DB.prepare("UPDATE Wallets SET balance=balance+? WHERE user_id=?").bind(500, uid),
+      env.DB.prepare(
+        "INSERT INTO RechargeOrders(user_id,item_type,item_name,wei_amount,points_added,member_days) " +
+          "VALUES(?,'wei','每日练习补给',500,0,0)"
+      ).bind(uid),
+    ];
+    if (!admin) {
+      statements.unshift(env.DB.prepare("INSERT INTO WalletTopupClaims(user_id,claim_day) VALUES(?,?)").bind(uid, day));
     }
     try {
-      await env.DB.batch([
-        env.DB.prepare("INSERT INTO WalletTopupClaims(user_id,claim_day) VALUES(?,?)").bind(uid, day),
-        env.DB.prepare("UPDATE Wallets SET balance=balance+? WHERE user_id=?").bind(500, uid),
-        env.DB.prepare(
-          "INSERT INTO RechargeOrders(user_id,item_type,item_name,wei_amount,points_added,member_days) " +
-            "VALUES(?,'wei','每日练习补给',500,0,0)"
-        ).bind(uid),
-      ]);
+      await env.DB.batch(statements);
     } catch (error) {
       if (String(error?.message || error).includes("UNIQUE constraint failed")) {
         return bad("今天的虚拟玮元补给已领取，请明天再来", 409);
