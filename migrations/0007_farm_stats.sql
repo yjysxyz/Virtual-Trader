@@ -1,0 +1,9 @@
+CREATE TABLE FarmStats(
+  user_id INTEGER PRIMARY KEY,
+  plantings INTEGER NOT NULL DEFAULT 0,
+  harvests INTEGER NOT NULL DEFAULT 0,
+  earned REAL NOT NULL DEFAULT 0,
+  FOREIGN KEY(user_id) REFERENCES Users(id) ON DELETE CASCADE
+);
+
+INSERT INTO FarmStats(user_id) SELECT id FROM Users;

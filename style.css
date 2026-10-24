@@ -12,3 +12,9 @@
 .stock-actions{display:flex;align-items:center;gap:5px;flex-wrap:wrap}.stock-actions .delete-stock-btn{border-color:#ead9d5;color:#a95549}.stock-actions button:disabled{opacity:.55;cursor:wait}
 @media(max-width:800px){.thead,.stock{grid-template-columns:minmax(0,1.2fr) minmax(66px,.9fr) minmax(50px,.7fr) minmax(88px,1.25fr);padding-left:6px;padding-right:6px;gap:4px}.stock-actions{gap:3px}.stock-actions button{padding:5px 4px;font-size:9px}}
 .primary:disabled{opacity:.78;cursor:not-allowed}.primary:disabled:hover{background:var(--ink)}
+
+/* 邮箱验证码（注册） */
+.code-actions{display:flex;align-items:center;gap:10px;margin:-4px 0 10px;flex-wrap:wrap}
+.code-actions .outline{padding:7px 10px;font-size:10px;white-space:nowrap}
+.code-hint{font-size:9px;line-height:1.5;color:#8a958d}
+.code-field input{letter-spacing:.18em;font-weight:600}

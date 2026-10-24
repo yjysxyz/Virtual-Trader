@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>锻剑工坊 · 清醒投资</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="forge.css?v=forge-20261024-12">
+</head>
+<body class="forge-page">
+  <header class="top">
+    <a class="brand" href="index.html"><span class="logo">醒</span><span>清醒投资<small>锻剑工坊 · 风险练习</small></span></a>
+    <span id="player" class="virtual">读取账户中…</span>
+  </header>
+  <main class="forge-main">
+    <section class="panel forge-panel">
+      <div class="eyebrow">FORGE · RISK PRACTICE</div>
+      <h1>锻剑工坊</h1>
+      <p class="forge-intro">每敲一锤，剑的价值都会提升；在 11 / 26 / 46 / 71 锤时提升品质，剑的价值翻倍。碎裂概率从 1% 起随锤数上升，70 锤时约 60%。</p>
+
+      <div class="forge-hud">
+        <div><small>虚拟资金</small><b id="cash">—</b></div>
+        <div><small>剑的价值</small><b id="value">¥0.00</b></div>
+        <div><small>锤击</small><b id="hits">0 锤</b></div>
+      </div>
+      <div id="stats" class="forge-stats">已锻剑 0 次 · 累计获得 ¥0.00 虚拟资金 · 次数不限</div>
+
+      <div class="forge-grade"><b id="swordName" class="grade-0">平凡的剑</b><span>11 / 26 / 46 / 71 锤提升品质 · 价值翻倍</span></div>
+
+      <div class="forge-stage" id="stage">
+        <div class="forge-glow" aria-hidden="true"></div>
+        <div class="forge-anvil" aria-hidden="true"></div>
+        <div id="sword" class="forge-sword" aria-hidden="true">
+          <div class="sword-blade blade-top"></div>
+          <div class="sword-blade blade-bottom"></div>
+          <div class="sword-guard"></div>
+          <div class="sword-grip"></div>
+          <div class="sword-pommel"></div>
+        </div>
+        <div id="hammer" class="forge-hammer" aria-hidden="true">
+          <div class="hammer-head"></div>
+          <div class="hammer-handle"></div>
+        </div>
+        <div id="sparks" class="forge-sparks" aria-hidden="true"></div>
+      </div>
+
+      <div class="forge-risk">
+        <span>碎裂风险</span>
+        <div class="risk-track"><i id="riskFill"></i></div>
+        <b id="riskText">1%</b>
+      </div>
+
+      <div class="forge-actions">
+        <button id="startBtn" class="primary full">开始锻剑</button>
+        <button id="hitBtn" class="primary full hidden">敲一锤</button>
+        <button id="sellBtn" class="outline full hidden">出售这把剑</button>
+      </div>
+      <div id="msg" class="forge-message"></div>
+
+      <div class="forge-foot"><a class="outline" href="index.html">← 返回模拟市场</a></div>
+    </section>
+  </main>
+  <script src="forge.js?v=forge-20261024-12"></script>
+</body>
+</html>

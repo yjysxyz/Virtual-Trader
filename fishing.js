@@ -46,12 +46,12 @@ async function refreshStatus(){
   start.disabled=false;start.textContent='开始钓鱼';hold.disabled=false;
 }
 function stopInput(){holding=false;$('#holdBtn').classList.remove('held')}
-function finishGame(won){
+function finishGame(){
   active=false;stopInput();cancelAnimationFrame(frame);$('#holdBtn').classList.add('hidden');$('#startBtn').classList.remove('hidden');$('#startBtn').disabled=true;$('#startBtn').textContent='正在结算…';
   const score=Math.max(0,Math.min(100,Math.round(progress*100)));
   api('/api/fishing/catch',{method:'POST',body:JSON.stringify({score})}).then(result=>{
-    if(won){$('#victoryTitle').textContent=result.fish.name==='钻石鱼王'?'钓到钻石鱼王！':'钓到鱼啦！';$('.victory-fish').textContent=result.fish.emoji;$('#victoryReward').textContent=`${result.fish.name} · 专注得分 ${result.score} · 获得 ${money(result.reward)} 虚拟资金`;$('#victoryOverlay').classList.remove('hidden')}
-    else $('#gameMessage').textContent=`钓到${result.fish.name}。本轮得分 ${result.score}，获得 ${money(result.reward)} 虚拟资金。`;
+    if(result.won){$('#victoryTitle').textContent=result.fish.name==='钻石鱼王'?'钓到钻石鱼王！':'钓到鱼啦！';$('.victory-fish').textContent=result.fish.emoji;$('#victoryReward').textContent=`${result.fish.name} · 进度 100% · 获得 ${money(result.reward)} 虚拟资金`;$('#victoryOverlay').classList.remove('hidden')}
+    else $('#gameMessage').textContent=`鱼跑了。本轮进度 ${result.score}%，没有获得虚拟资金。只有进度填满才算钓到鱼。`;
   }).catch(error=>{$('#gameMessage').textContent=error.message}).finally(async()=>{
     try{await refreshStatus()}catch(error){$('#gameMessage').textContent=error.message}
     $('#startBtn').classList.remove('hidden');
@@ -73,7 +73,7 @@ function tick(now){
   $('#progressFill').style.width=`${Math.round(progress*100)}%`;$('#progressText').textContent=`${Math.round(progress*100)}%`;
   $('#timerText').textContent='不限时';
   drawGame();
-  if(progress>=1||(hasProgress&&progress<=0)){finishGame(progress>=1);return}
+  if(progress>=1||(hasProgress&&progress<=0)){finishGame();return}
   frame=requestAnimationFrame(tick);
 }
 $('#startBtn').addEventListener('click',async()=>{
@@ -82,7 +82,7 @@ $('#startBtn').addEventListener('click',async()=>{
   try{await api('/api/fishing/start',{method:'POST',body:'{}'});await refreshStatus()}
   catch(error){$('#gameMessage').textContent=error.message;startButton.disabled=false;startButton.textContent='再试一次';return}
   active=true;holding=false;hasProgress=false;elapsed=0;progress=0;barY=.38;barVelocity=0;fishY=.5;lastFrame=performance.now();
-  $('#progressFill').style.width='0%';$('#progressText').textContent='0%';$('#timerText').textContent='不限时';$('#gameMessage').textContent='不限时练习：进度填满即可成功；获得进度后若退回零，本轮结束。';
+  $('#progressFill').style.width='0%';$('#progressText').textContent='0%';$('#timerText').textContent='不限时';$('#gameMessage').textContent='不限时练习：只有进度填满才能钓到鱼并获得虚拟资金；进度退回零则本轮结束，没有奖励。';
   $('#startBtn').classList.add('hidden');$('#holdBtn').classList.remove('hidden');$('.fishing-game').classList.add('fishing-running');
   frame=requestAnimationFrame(tick);
 });

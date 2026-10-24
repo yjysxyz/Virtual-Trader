@@ -1,0 +1,33 @@
+CREATE TABLE MiningRuns(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  pot REAL NOT NULL DEFAULT 0,
+  digs INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'active',
+  started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ended_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES Users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE ForgeRuns(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  value REAL NOT NULL DEFAULT 0,
+  hits INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'active',
+  started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ended_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES Users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE GameStats(
+  user_id INTEGER NOT NULL,
+  game TEXT NOT NULL,
+  runs INTEGER NOT NULL DEFAULT 0,
+  earned REAL NOT NULL DEFAULT 0,
+  PRIMARY KEY(user_id, game),
+  FOREIGN KEY(user_id) REFERENCES Users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_mining_runs_user_status ON MiningRuns(user_id, status);
+CREATE INDEX idx_forge_runs_user_status ON ForgeRuns(user_id, status);

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>矿场挖掘 · 清醒投资</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="mining.css?v=mining-20261024-7">
+</head>
+<body class="mine-page">
+  <header class="top">
+    <a class="brand" href="index.html"><span class="logo">醒</span><span>清醒投资<small>矿场挖掘 · 风险练习</small></span></a>
+    <span id="player" class="virtual">读取账户中…</span>
+  </header>
+  <main class="mine-main">
+    <section class="panel mine-panel">
+      <div class="eyebrow">MINING · RISK PRACTICE</div>
+      <h1>矿场挖掘</h1>
+      <p class="mine-intro">按住面前这块泥土开始挖。松开手会重置这一块的进度。挖到煤、铁、金或钻石收益更高，挖到炸弹会清空本轮矿袋；你可以随时带着当前收益离开。</p>
+
+      <div class="mine-hud">
+        <div><small>虚拟资金</small><b id="cash">—</b></div>
+        <div><small>当前矿袋</small><b id="pot">¥0.00</b></div>
+        <div><small>已挖</small><b id="digs">0 铲</b></div>
+      </div>
+      <div id="stats" class="mine-stats">已挖矿 0 次 · 累计获得 ¥0.00 虚拟资金 · 次数不限</div>
+
+      <div class="mine-view locked" id="mineView">
+        <canvas id="blockCanvas" width="360" height="360" tabindex="0" role="button" aria-label="按住方块进行挖掘"></canvas>
+        <canvas id="ringCanvas" class="mine-ring" width="360" height="360" aria-hidden="true"></canvas>
+        <div class="mine-crosshair" aria-hidden="true"></div>
+        <div class="mine-pickaxe" id="pickaxe" aria-hidden="true">⛏️</div>
+        <div class="mine-view-hint" id="holdHint">先点“开始挖矿”</div>
+        <div id="mineAlert" class="mine-alert hidden">💣 炸弹！</div>
+      </div>
+
+      <div class="mine-progress">
+        <div class="mine-progress-track"><i id="mineProgress"></i></div>
+        <b id="mineProgressText">0%</b>
+      </div>
+
+      <div class="mine-actions">
+        <button id="startBtn" class="primary full">开始挖矿</button>
+        <button id="leaveBtn" class="outline full hidden">带着收益离开</button>
+      </div>
+      <div id="msg" class="mine-message"></div>
+
+      <div class="mine-foot"><a class="outline" href="index.html">← 返回模拟市场</a></div>
+    </section>
+  </main>
+  <script src="mining.js?v=mining-20261024-10"></script>
+</body>
+</html>

@@ -1,10 +1,27 @@
+# Cloudflare Pages 直传（wrangler pages deploy .）时的排除清单。
+# Git 集成部署只会拿到仓库里的文件，但这里同样保持完整，避免把本地数据或密钥上传成公开资源。
+
 server.py
 requirements.txt
 .env
-.env.example
+.env.*
 init.sql
 migrations/
 README.md
+使用说明书.md
+
+# 本地数据库：包含真实邮箱与密码哈希，绝对不能公开
+*.db
+*.sqlite
+*.sqlite3
 knowledge.db
 market_sim.db
+market_sim_from_mysql.db
+
+# 本机缓存与版本库
+.git/
+.wrangler/
+.vscode/
 __pycache__/
+*.py
+*.pyc
