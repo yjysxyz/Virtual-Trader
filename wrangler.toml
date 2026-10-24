@@ -1,5 +1,5 @@
 # Cloudflare Pages 项目名，必须与 Cloudflare 控制台中的 Pages 项目名一致。
-name = "Virtual-Trader"
+name = "virtual-trader"
 compatibility_date = "2026-10-20"
 pages_build_output_dir = "."
 
