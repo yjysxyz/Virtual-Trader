@@ -1359,7 +1359,7 @@ class App(SimpleHTTPRequestHandler):
             self.send_json({'ok': True, 'item_name': item_name})
             return
 
-        if path in ('/api/admin/users/kick', '/api/admin/users/ban'):
+        if path in ('/api/admin/users/delete', '/api/admin/users/ban'):
             if not is_admin_user(c, uid):
                 self.send_json({'error': '仅管理员可以管理用户'}, 403)
                 return
@@ -1371,7 +1371,7 @@ class App(SimpleHTTPRequestHandler):
                 self.send_json({'error': '不能操作当前登录账号'}, 400)
                 return
             target = c.execute(
-                'SELECT id,is_admin,is_banned FROM Users WHERE id=?', (target_id,)
+                'SELECT id,email,is_admin,is_banned FROM Users WHERE id=?', (target_id,)
             ).fetchone()
             if not target:
                 self.send_json({'error': '用户不存在'}, 404)
@@ -1379,11 +1379,21 @@ class App(SimpleHTTPRequestHandler):
             if target['is_admin']:
                 self.send_json({'error': '不能操作其他管理员'}, 400)
                 return
-            if path.endswith('/kick'):
-                c.execute('DELETE FROM Sessions WHERE user_id=?', (target_id,))
-                c.execute('UPDATE Users SET last_seen_at=NULL WHERE id=?', (target_id,))
+            if path.endswith('/delete'):
+                c.execute(
+                    'DELETE FROM StockSwaps WHERE from_user_id=? OR to_user_id=?',
+                    (target_id, target_id),
+                )
+                for table in (
+                    'GameStats', 'MiningRuns', 'ForgeRuns', 'FishingDaily',
+                    'WalletTopupClaims', 'RechargeOrders', 'Orders', 'Holdings',
+                    'Sessions', 'Accounts', 'Wallets', 'PointBalances', 'Memberships',
+                ):
+                    c.execute(f'DELETE FROM {table} WHERE user_id=?', (target_id,))
+                c.execute('DELETE FROM EmailCodes WHERE email=?', (target['email'],))
+                c.execute('DELETE FROM Users WHERE id=?', (target_id,))
                 c.commit()
-                self.send_json({'ok': True, 'action': 'kick'})
+                self.send_json({'ok': True, 'action': 'delete'})
                 return
             banned = bool(data.get('banned', True))
             c.execute('UPDATE Users SET is_banned=? WHERE id=?', (1 if banned else 0, target_id))

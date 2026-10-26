@@ -850,19 +850,28 @@ async function handle(request, env) {
     });
   }
 
-  if (path === "/api/admin/users/kick" || path === "/api/admin/users/ban") {
+  if (path === "/api/admin/users/delete" || path === "/api/admin/users/ban") {
     if (!(await isAdmin(env, uid))) return bad("仅管理员可以管理用户", 403);
     const targetId = Number(body.id);
     if (!Number.isInteger(targetId) || targetId === uid) return bad("不能操作当前登录账号");
-    const target = await env.DB.prepare("SELECT id,is_admin FROM Users WHERE id=?").bind(targetId).first();
+    const target = await env.DB.prepare("SELECT id,email,is_admin FROM Users WHERE id=?").bind(targetId).first();
     if (!target) return bad("用户不存在", 404);
     if (target.is_admin) return bad("不能操作其他管理员");
-    if (path.endsWith("/kick")) {
-      await env.DB.batch([
-        env.DB.prepare("DELETE FROM Sessions WHERE user_id=?").bind(targetId),
-        env.DB.prepare("UPDATE Users SET last_seen_at=NULL WHERE id=?").bind(targetId),
-      ]);
-      return json({ ok: true, action: "kick" });
+    if (path.endsWith("/delete")) {
+      const statements = [
+        env.DB.prepare("DELETE FROM StockSwaps WHERE from_user_id=? OR to_user_id=?").bind(targetId, targetId),
+      ];
+      for (const table of [
+        "GameStats", "MiningRuns", "ForgeRuns", "FishingDaily",
+        "WalletTopupClaims", "RechargeOrders", "Orders", "Holdings",
+        "Sessions", "Accounts", "Wallets", "PointBalances", "Memberships",
+      ]) {
+        statements.push(env.DB.prepare(`DELETE FROM ${table} WHERE user_id=?`).bind(targetId));
+      }
+      statements.push(env.DB.prepare("DELETE FROM EmailCodes WHERE email=?").bind(target.email));
+      statements.push(env.DB.prepare("DELETE FROM Users WHERE id=?").bind(targetId));
+      await env.DB.batch(statements);
+      return json({ ok: true, action: "delete" });
     }
     const banned = body.banned !== false;
     const statements = [
