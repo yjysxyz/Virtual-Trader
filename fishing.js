@@ -100,3 +100,6 @@ drawScene();drawGame();
     $('#playerName').textContent=`练习账户：${me.username}`;await refreshStatus();
   }catch(error){$('#playerName').textContent='连接失败';$('#fishingCash').textContent='—';$('#startBtn').disabled=true;$('#startBtn').textContent='暂时无法进入';$('#gameMessage').textContent=error.message}
 })();
+
+const beatSession=()=>{const token=sessionStorage.getItem('marketSession');const headers=token?{Authorization:'Bearer '+token}:{};fetch('/api/heartbeat',{method:'POST',headers,credentials:'same-origin'}).catch(()=>{})};
+beatSession();setInterval(beatSession,45000);

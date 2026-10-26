@@ -56,6 +56,42 @@ const isAdmin = async (env, uid) => {
   const row = await env.DB.prepare("SELECT is_admin FROM Users WHERE id=?").bind(uid).first();
   return Boolean(row?.is_admin);
 };
+const isOnline = (lastSeen) => {
+  if (!lastSeen) return false;
+  return (Date.now() - parseUtc(lastSeen)) / 1000 <= ONLINE_WINDOW_SECONDS;
+};
+async function holdingMoveStatements(env, fromUid, toUid, code, quantity, price) {
+  const source = await env.DB.prepare("SELECT quantity FROM Holdings WHERE user_id=? AND code=?")
+    .bind(fromUid, code)
+    .first();
+  if (!source || Number(source.quantity) < quantity) return null;
+  const statements = [];
+  const remaining = Number(source.quantity) - quantity;
+  if (remaining === 0) {
+    statements.push(env.DB.prepare("DELETE FROM Holdings WHERE user_id=? AND code=?").bind(fromUid, code));
+  } else {
+    statements.push(
+      env.DB.prepare("UPDATE Holdings SET quantity=? WHERE user_id=? AND code=?").bind(remaining, fromUid, code)
+    );
+  }
+  const target = await env.DB.prepare("SELECT quantity,avg_cost FROM Holdings WHERE user_id=? AND code=?")
+    .bind(toUid, code)
+    .first();
+  if (target) {
+    const newQuantity = Number(target.quantity) + quantity;
+    const newCost = (Number(target.avg_cost) * Number(target.quantity) + price * quantity) / newQuantity;
+    statements.push(
+      env.DB.prepare("UPDATE Holdings SET quantity=?,avg_cost=? WHERE user_id=? AND code=?")
+        .bind(newQuantity, newCost, toUid, code)
+    );
+  } else {
+    statements.push(
+      env.DB.prepare("INSERT INTO Holdings(user_id,code,quantity,avg_cost) VALUES(?,?,?,?)")
+        .bind(toUid, code, quantity, price)
+    );
+  }
+  return statements;
+}
 
 const DEFAULT_CASH = 100000;
 const DEFAULT_WEI = 2000;
@@ -77,6 +113,8 @@ const FORGE_RISK_TARGET_HITS = 70;
 const FORGE_GRADES = ["平凡的剑", "优秀的剑", "精湛的剑", "史诗的剑", "传奇的剑"];
 const FORGE_GRADE_THRESHOLDS = [11, 26, 46, 71];
 const FORGE_HIT_REWARD = [25, 60];
+const POINT_CASH_RATE = 10;
+const ONLINE_WINDOW_SECONDS = 120;
 const TICKS_KEPT = 300;
 const SESSION_DAYS = 7;
 const PBKDF2_ITERATIONS = 100000; // Workers 的 Web Crypto 上限
@@ -201,7 +239,12 @@ async function handle(request, env) {
     ""
   ).trim();
   const session = token
-    ? await env.DB.prepare("SELECT user_id FROM Sessions WHERE token=? AND expires_at>CURRENT_TIMESTAMP").bind(token).first()
+    ? await env.DB.prepare(
+        "SELECT s.user_id FROM Sessions s JOIN Users u ON u.id=s.user_id " +
+          "WHERE s.token=? AND s.expires_at>CURRENT_TIMESTAMP AND u.is_banned=0"
+      )
+        .bind(token)
+        .first()
     : null;
   const uid = session?.user_id ?? null;
   const body = method === "POST" ? await request.json().catch(() => ({})) : {};
@@ -268,13 +311,15 @@ async function handle(request, env) {
         throw error;
       }
     } else {
-      const row = await env.DB.prepare("SELECT id,password FROM Users WHERE username=? OR email=?")
+      const row = await env.DB.prepare("SELECT id,password,is_banned FROM Users WHERE username=? OR email=?")
         .bind(name, email || name.toLowerCase())
         .first();
       if (!row || !(await checkPassword(password, row.password))) return bad("账号或密码错误", 401);
+      if (row.is_banned) return bad("该账号已被管理员拉黑，无法登录", 403);
       userId = row.id;
     }
     const sid = await createSession(env, userId);
+    await env.DB.prepare("UPDATE Users SET last_seen_at=CURRENT_TIMESTAMP WHERE id=?").bind(userId).run();
     return json({ ok: true, token: sid }, 200, { "Set-Cookie": sessionCookie(sid) });
   }
 
@@ -373,7 +418,7 @@ async function handle(request, env) {
       env.DB.prepare("SELECT points FROM PointBalances WHERE user_id=?").bind(uid).first(),
       env.DB.prepare("SELECT expires_at FROM Memberships WHERE user_id=?").bind(uid).first(),
       env.DB.prepare(
-        "SELECT item_type,item_name,wei_amount,points_added,member_days,created_at " +
+        "SELECT item_type,item_name,wei_amount,points_added,cash_amount,member_days,created_at " +
           "FROM RechargeOrders WHERE user_id=? ORDER BY id DESC LIMIT 10"
       )
         .bind(uid)
@@ -386,7 +431,94 @@ async function handle(request, env) {
       points: points?.points || 0,
       member_expires_at: isoZ(member?.expires_at),
       topup_available: admin || !claim,
+      points_cash_rate: POINT_CASH_RATE,
       history: historyRows.results.map((row) => ({ ...row, created_at: isoZ(row.created_at) })),
+    });
+  }
+
+  if (path === "/api/heartbeat" && method === "POST") {
+    await env.DB.prepare("UPDATE Users SET last_seen_at=CURRENT_TIMESTAMP WHERE id=?").bind(uid).run();
+    return json({ ok: true, is_admin: await isAdmin(env, uid) });
+  }
+
+  if (path === "/api/points/exchange" && method === "POST") {
+    const points = Number(body.points);
+    if (!Number.isInteger(points) || points <= 0 || points > 1000000) return bad("请输入有效的积分数量");
+    const balance = await env.DB.prepare("SELECT points FROM PointBalances WHERE user_id=?").bind(uid).first();
+    if (!balance || Number(balance.points) < points) return bad("积分不足");
+    const amount = money(points * POINT_CASH_RATE);
+    await env.DB.batch([
+      env.DB.prepare("UPDATE PointBalances SET points=points-? WHERE user_id=?").bind(points, uid),
+      env.DB.prepare("UPDATE Accounts SET cash=cash+? WHERE user_id=?").bind(amount, uid),
+      env.DB.prepare(
+        "INSERT INTO RechargeOrders(user_id,item_type,item_name,wei_amount,points_added,cash_amount,member_days) " +
+          "VALUES(?,'points_cash','积分兑换虚拟余额',0,?,?,0)"
+      ).bind(uid, -points, amount),
+    ]);
+    const account = await env.DB.prepare("SELECT cash FROM Accounts WHERE user_id=?").bind(uid).first();
+    const left = await env.DB.prepare("SELECT points FROM PointBalances WHERE user_id=?").bind(uid).first();
+    return json({ ok: true, points: left?.points || 0, amount, cash: money(account?.cash), rate: POINT_CASH_RATE });
+  }
+
+  if (path === "/api/admin/users" && method === "GET") {
+    if (!(await isAdmin(env, uid))) return bad("仅管理员可以查看用户", 403);
+    const rows = (
+      await env.DB.prepare(
+        "SELECT id,username,email,is_admin,is_banned,created_at,last_seen_at FROM Users ORDER BY id"
+      ).all()
+    ).results;
+    return json(
+      rows.map((row) => ({
+        ...row,
+        online: isOnline(row.last_seen_at),
+        created_at: isoZ(row.created_at),
+        last_seen_at: row.last_seen_at ? isoZ(row.last_seen_at) : null,
+      }))
+    );
+  }
+
+  if (path === "/api/admin/swaps" && method === "GET") {
+    if (!(await isAdmin(env, uid))) return bad("仅管理员可以查看股票互换", 403);
+    const rows = (
+      await env.DB.prepare(
+        "SELECT s.*,fu.username AS from_username,tu.username AS to_username," +
+          "f.name AS from_name,t.name AS to_name " +
+          "FROM StockSwaps s JOIN Users fu ON fu.id=s.from_user_id " +
+          "JOIN Users tu ON tu.id=s.to_user_id " +
+          "JOIN Stocks f ON f.code=s.from_code JOIN Stocks t ON t.code=s.to_code " +
+          "ORDER BY s.id DESC LIMIT 100"
+      ).all()
+    ).results;
+    return json(
+      rows.map((row) => ({
+        ...row,
+        created_at: isoZ(row.created_at),
+        responded_at: row.responded_at ? isoZ(row.responded_at) : null,
+      }))
+    );
+  }
+
+  if (path === "/api/swaps" && method === "GET") {
+    const rows = (
+      await env.DB.prepare(
+        "SELECT s.*,fu.username AS from_username,tu.username AS to_username," +
+          "f.name AS from_name,t.name AS to_name " +
+          "FROM StockSwaps s JOIN Users fu ON fu.id=s.from_user_id " +
+          "JOIN Users tu ON tu.id=s.to_user_id " +
+          "JOIN Stocks f ON f.code=s.from_code JOIN Stocks t ON t.code=s.to_code " +
+          "WHERE s.from_user_id=? OR s.to_user_id=? ORDER BY s.id DESC LIMIT 50"
+      )
+        .bind(uid, uid)
+        .all()
+    ).results;
+    const items = rows.map((row) => ({
+      ...row,
+      created_at: isoZ(row.created_at),
+      responded_at: row.responded_at ? isoZ(row.responded_at) : null,
+    }));
+    return json({
+      incoming: items.filter((row) => row.to_user_id === uid),
+      outgoing: items.filter((row) => row.from_user_id === uid),
     });
   }
 
@@ -708,6 +840,98 @@ async function handle(request, env) {
       attempts: row.attempts,
       daily_limit: null,
     });
+  }
+
+  if (path === "/api/admin/users/kick" || path === "/api/admin/users/ban") {
+    if (!(await isAdmin(env, uid))) return bad("仅管理员可以管理用户", 403);
+    const targetId = Number(body.id);
+    if (!Number.isInteger(targetId) || targetId === uid) return bad("不能操作当前登录账号");
+    const target = await env.DB.prepare("SELECT id,is_admin FROM Users WHERE id=?").bind(targetId).first();
+    if (!target) return bad("用户不存在", 404);
+    if (target.is_admin) return bad("不能操作其他管理员");
+    if (path.endsWith("/kick")) {
+      await env.DB.batch([
+        env.DB.prepare("DELETE FROM Sessions WHERE user_id=?").bind(targetId),
+        env.DB.prepare("UPDATE Users SET last_seen_at=NULL WHERE id=?").bind(targetId),
+      ]);
+      return json({ ok: true, action: "kick" });
+    }
+    const banned = body.banned !== false;
+    const statements = [
+      env.DB.prepare("UPDATE Users SET is_banned=? WHERE id=?").bind(banned ? 1 : 0, targetId),
+    ];
+    if (banned) {
+      statements.push(env.DB.prepare("DELETE FROM Sessions WHERE user_id=?").bind(targetId));
+      statements.push(env.DB.prepare("UPDATE Users SET last_seen_at=NULL WHERE id=?").bind(targetId));
+    }
+    await env.DB.batch(statements);
+    return json({ ok: true, action: banned ? "ban" : "unban", banned });
+  }
+
+  if (path === "/api/swaps" && method === "POST") {
+    const toUsername = String(body.to_username || "").trim();
+    const fromCode = String(body.from_code || "").trim();
+    const toCode = String(body.to_code || "").trim();
+    const fromQuantity = Number(body.from_quantity);
+    const toQuantity = Number(body.to_quantity);
+    if (fromCode === toCode) return bad("互换的两只股票不能相同");
+    if (![fromQuantity, toQuantity].every((n) => Number.isInteger(n) && n > 0)) return bad("互换数量必须大于 0");
+    const target = await env.DB.prepare("SELECT id,is_banned FROM Users WHERE username=?").bind(toUsername).first();
+    if (!target) return bad("找不到对方用户名", 404);
+    if (target.id === uid) return bad("不能和自己互换");
+    if (target.is_banned) return bad("对方账号已被拉黑");
+    for (const code of [fromCode, toCode]) {
+      const stock = await env.DB.prepare("SELECT 1 FROM Stocks WHERE code=?").bind(code).first();
+      if (!stock) return bad("股票不存在", 404);
+    }
+    const holding = await env.DB.prepare("SELECT quantity FROM Holdings WHERE user_id=? AND code=?")
+      .bind(uid, fromCode)
+      .first();
+    if (!holding || Number(holding.quantity) < fromQuantity) return bad("你持有的该股票数量不足");
+    const message = cleanText(body.message || "", 0, 200);
+    if (message === null) return bad("留言包含不支持的字符或过长");
+    const result = await env.DB.prepare(
+      "INSERT INTO StockSwaps(from_user_id,to_user_id,from_code,from_quantity,to_code,to_quantity,message) " +
+        "VALUES(?,?,?,?,?,?,?)"
+    )
+      .bind(uid, target.id, fromCode, fromQuantity, toCode, toQuantity, message)
+      .run();
+    return json({ ok: true, id: result.meta.last_row_id });
+  }
+
+  if (path === "/api/swaps/accept" || path === "/api/swaps/decline") {
+    const swapId = Number(body.id);
+    if (!Number.isInteger(swapId)) return bad("互换请求不存在", 404);
+    const swap = await env.DB.prepare("SELECT * FROM StockSwaps WHERE id=?").bind(swapId).first();
+    if (!swap) return bad("互换请求不存在", 404);
+    if (swap.from_user_id !== uid && swap.to_user_id !== uid) return bad("无权操作该互换请求", 403);
+    if (swap.status !== "pending") return bad("该请求已经处理", 409);
+    if (path.endsWith("/decline")) {
+      const status = uid === swap.to_user_id ? "declined" : "cancelled";
+      await env.DB.prepare("UPDATE StockSwaps SET status=?,responded_at=CURRENT_TIMESTAMP WHERE id=?")
+        .bind(status, swapId)
+        .run();
+      return json({ ok: true, status });
+    }
+    if (uid !== swap.to_user_id) return bad("只有接收方可以接受互换", 403);
+    const fromStock = await env.DB.prepare("SELECT price FROM Stocks WHERE code=?").bind(swap.from_code).first();
+    const toStock = await env.DB.prepare("SELECT price FROM Stocks WHERE code=?").bind(swap.to_code).first();
+    if (!fromStock || !toStock) return bad("股票数据不存在", 404);
+    const moveA = await holdingMoveStatements(
+      env, swap.from_user_id, uid, swap.from_code, Number(swap.from_quantity), Number(fromStock.price)
+    );
+    if (!moveA) return bad("发起方持仓不足，无法完成互换");
+    const moveB = await holdingMoveStatements(
+      env, uid, swap.from_user_id, swap.to_code, Number(swap.to_quantity), Number(toStock.price)
+    );
+    if (!moveB) return bad("你的持仓不足，无法完成互换");
+    await env.DB.batch([
+      ...moveA,
+      ...moveB,
+      env.DB.prepare("UPDATE StockSwaps SET status='accepted',responded_at=CURRENT_TIMESTAMP WHERE id=?")
+        .bind(swapId),
+    ]);
+    return json({ ok: true, status: "accepted" });
   }
 
   if (path === "/api/trade" && method === "POST") {

@@ -21,4 +21,48 @@
 
 /* 管理员标识 */
 .admin-badge{display:inline-block;margin-left:6px;padding:2px 6px;border:1px solid #c9a24a;border-radius:3px;background:#f6edd9;color:#8a641f;font-size:9px;font-weight:700;letter-spacing:.08em;vertical-align:middle}
+
+/* 积分换虚拟余额 */
+.points-cash{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;background:#faf6e9;border:1px solid #eee2c3;padding:10px 12px;margin:0 0 12px}
+.points-cash-info b,.points-cash-info small{display:block}
+.points-cash-info b{font-size:11px;color:#5d563c}
+.points-cash-info small{font-size:9px;color:#95876a;margin-top:4px;line-height:1.5}
+.points-cash-form{display:flex;gap:6px}
+.points-cash-form input{width:88px;height:32px;border:1px solid #e3d7bc;background:#fff;padding:0 8px;font:11px inherit;color:#4b553f}
+.points-cash-form button{height:32px;padding:0 9px;white-space:nowrap}
+.points-cash .message{grid-column:1/-1;min-height:0;margin:0}
+
+/* 股票互换 */
+.swap-dialog{width:min(640px,100%);max-height:90vh;overflow:auto}
+.swap-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.swap-list-head{font-size:10px;font-weight:600;color:#64736a;margin-top:16px;padding-top:12px;border-top:1px solid #edf0eb}
+.swap-list{max-height:300px;overflow:auto;margin-top:8px}
+.swap-item{border:1px solid #e9ece8;padding:10px;margin-bottom:8px;font-size:10px;line-height:1.65;color:#59685f;background:#fcfdfb}
+.swap-item-head{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}
+.swap-item-head b{font-size:10px;color:#3e4d43}
+.swap-item .swap-detail{margin-top:5px;color:#68776d}
+.swap-item .swap-message{margin-top:4px;color:#9a8a70}
+.swap-actions{display:flex;gap:6px;margin-top:7px;flex-wrap:wrap}
+.swap-actions button{border:1px solid #dfe7df;background:#fff;color:#4e7357;padding:5px 8px;border-radius:3px;font-size:9px;cursor:pointer}
+.swap-actions button.danger{color:#a95c50;border-color:#ecd8d2}
+.status-pill{font-size:9px;border-radius:20px;padding:2px 7px;white-space:nowrap}
+.status-pending{background:#faf1dd;color:#9a6a2a}
+.status-accepted{background:#e9f2e9;color:#3d7a5a}
+.status-declined,.status-cancelled{background:#f3eeee;color:#996b62}
+
+/* 管理员用户/互换面板 */
+.admin-dialog{width:min(980px,100%);max-height:90vh;overflow:auto}
+.admin-head{display:flex;justify-content:space-between;align-items:center;margin:16px 0 8px;font-size:11px;color:#5c6b61}
+.admin-head .outline{padding:5px 8px;font-size:9px}
+.admin-table-wrap{overflow:auto;max-height:300px;border:1px solid #e9ece8}
+.admin-table{width:100%;border-collapse:collapse;font-size:9px;min-width:650px}
+.admin-table th,.admin-table td{padding:7px 8px;text-align:left;border-bottom:1px solid #eef1ed;white-space:nowrap}
+.admin-table th{background:#f8f9f6;color:#8a968c;font-weight:500;position:sticky;top:0}
+.admin-table td{color:#5b6a60}
+.admin-table .actions{display:flex;gap:4px}
+.admin-table .actions button{padding:4px 6px;font-size:9px;border-radius:3px}
+.online-yes{color:#3d7a5a;font-weight:600}
+.online-no{color:#a6afa8}
+.banned-yes{color:#a95c50;font-weight:600}
+@media(max-width:600px){.swap-grid{grid-template-columns:1fr}.points-cash{grid-template-columns:1fr}.points-cash-form input{flex:1;width:auto}}
 .repo-link{text-decoration:none;white-space:nowrap}

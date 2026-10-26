@@ -509,3 +509,6 @@ load().catch((error) => {
   leaveBtn.classList.add('hidden');
   setMsg(error.message, 'bad');
 });
+
+const beatSession=()=>{const token=sessionStorage.getItem('marketSession');const headers=token?{Authorization:'Bearer '+token}:{};fetch('/api/heartbeat',{method:'POST',headers,credentials:'same-origin'}).catch(()=>{})};
+beatSession();setInterval(beatSession,45000);

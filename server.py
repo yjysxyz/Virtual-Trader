@@ -60,6 +60,8 @@ FORGE_RISK_TARGET_HITS = 70
 FORGE_GRADES = ('平凡的剑', '优秀的剑', '精湛的剑', '史诗的剑', '传奇的剑')
 FORGE_GRADE_THRESHOLDS = (11, 26, 46, 71)
 FORGE_HIT_REWARD = (25, 60)
+POINT_CASH_RATE = 10
+ONLINE_WINDOW_SECONDS = 120
 TICKS_KEPT = 300
 SESSION_DAYS = 7
 PBKDF2_ITERATIONS = 100_000       # 与 Cloudflare Workers 的上限保持一致
@@ -103,7 +105,8 @@ UNSAFE_TEXT_RE = re.compile(r'[<>\x00-\x1f\x7f]')
 SCHEMA = (
     "CREATE TABLE IF NOT EXISTS Users(id INTEGER PRIMARY KEY AUTOINCREMENT,"
     "username TEXT UNIQUE NOT NULL,email TEXT UNIQUE NOT NULL,password TEXT NOT NULL,"
-    "is_admin INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+    "is_admin INTEGER NOT NULL DEFAULT 0,is_banned INTEGER NOT NULL DEFAULT 0,"
+    "last_seen_at TEXT,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
     "CREATE TABLE IF NOT EXISTS Stocks(code TEXT PRIMARY KEY,name TEXT NOT NULL,"
     "price NUMERIC NOT NULL,change_pct NUMERIC NOT NULL DEFAULT 0,category TEXT NOT NULL,"
     "is_custom INTEGER NOT NULL DEFAULT 0)",
@@ -130,8 +133,19 @@ SCHEMA = (
     "CREATE TABLE IF NOT EXISTS RechargeOrders(id INTEGER PRIMARY KEY AUTOINCREMENT,"
     "user_id INTEGER NOT NULL,item_type TEXT NOT NULL,item_name TEXT NOT NULL,"
     "wei_amount NUMERIC NOT NULL,points_added INTEGER NOT NULL DEFAULT 0,"
+    "cash_amount NUMERIC NOT NULL DEFAULT 0,"
     "member_days INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,"
     "FOREIGN KEY(user_id) REFERENCES Users(id) ON DELETE CASCADE)",
+    "CREATE TABLE IF NOT EXISTS StockSwaps(id INTEGER PRIMARY KEY AUTOINCREMENT,"
+    "from_user_id INTEGER NOT NULL,to_user_id INTEGER NOT NULL,"
+    "from_code TEXT NOT NULL,from_quantity INTEGER NOT NULL,"
+    "to_code TEXT NOT NULL,to_quantity INTEGER NOT NULL,"
+    "message TEXT,status TEXT NOT NULL DEFAULT 'pending',"
+    "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,responded_at TEXT,"
+    "FOREIGN KEY(from_user_id) REFERENCES Users(id) ON DELETE CASCADE,"
+    "FOREIGN KEY(to_user_id) REFERENCES Users(id) ON DELETE CASCADE,"
+    "FOREIGN KEY(from_code) REFERENCES Stocks(code),"
+    "FOREIGN KEY(to_code) REFERENCES Stocks(code))",
     "CREATE TABLE IF NOT EXISTS WalletTopupClaims(user_id INTEGER NOT NULL,"
     "claim_day TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,"
     "PRIMARY KEY(user_id,claim_day),"
@@ -421,6 +435,49 @@ def is_admin_user(c, uid):
     return bool(row and row['is_admin'])
 
 
+def is_online(value):
+    if not value:
+        return False
+    try:
+        return (utcnow() - parse_utc(value)).total_seconds() <= ONLINE_WINDOW_SECONDS
+    except (TypeError, ValueError):
+        return False
+
+
+def move_holding(c, from_uid, to_uid, code, quantity, price):
+    """把股票从 from_uid 转到 to_uid；接收方按当前模拟价加权成本。"""
+    source = c.execute(
+        'SELECT quantity,avg_cost FROM Holdings WHERE user_id=? AND code=?',
+        (from_uid, code),
+    ).fetchone()
+    if not source or source['quantity'] < quantity:
+        raise ValueError('发起方持仓不足')
+    remaining = source['quantity'] - quantity
+    if remaining == 0:
+        c.execute('DELETE FROM Holdings WHERE user_id=? AND code=?', (from_uid, code))
+    else:
+        c.execute(
+            'UPDATE Holdings SET quantity=? WHERE user_id=? AND code=?',
+            (remaining, from_uid, code),
+        )
+    target = c.execute(
+        'SELECT quantity,avg_cost FROM Holdings WHERE user_id=? AND code=?',
+        (to_uid, code),
+    ).fetchone()
+    if target:
+        new_quantity = target['quantity'] + quantity
+        total_cost = Decimal(str(target['avg_cost'])) * target['quantity'] + price * quantity
+        c.execute(
+            'UPDATE Holdings SET quantity=?,avg_cost=? WHERE user_id=? AND code=?',
+            (new_quantity, total_cost / new_quantity, to_uid, code),
+        )
+    else:
+        c.execute(
+            'INSERT INTO Holdings(user_id,code,quantity,avg_cost) VALUES(?,?,?,?)',
+            (to_uid, code, quantity, price),
+        )
+
+
 def init_db():
     """建表、补列、写入种子数据、清理过期会话与过长行情历史。"""
     c = db()
@@ -428,6 +485,9 @@ def init_db():
         for statement in SCHEMA:
             c.execute(statement)
         ensure_column(c, 'Users', 'is_admin', 'INTEGER NOT NULL DEFAULT 0')
+        ensure_column(c, 'Users', 'is_banned', 'INTEGER NOT NULL DEFAULT 0')
+        ensure_column(c, 'Users', 'last_seen_at', 'TEXT')
+        ensure_column(c, 'RechargeOrders', 'cash_amount', 'NUMERIC NOT NULL DEFAULT 0')
         ensure_column(c, 'Stocks', 'is_custom', 'INTEGER NOT NULL DEFAULT 0')
         ensure_column(c, 'FishingDaily', 'pending', 'INTEGER NOT NULL DEFAULT 0')
         ensure_column(c, 'FishingDaily', 'started_at', 'TEXT')
@@ -601,10 +661,13 @@ class App(SimpleHTTPRequestHandler):
         if not token:
             return None
         row = c.execute(
-            'SELECT user_id FROM Sessions WHERE token=? AND expires_at>?',
+            'SELECT s.user_id,u.is_banned FROM Sessions s JOIN Users u ON u.id=s.user_id '
+            'WHERE s.token=? AND s.expires_at>?',
             (token, utcstamp()),
         ).fetchone()
-        return row['user_id'] if row else None
+        if not row or row['is_banned']:
+            return None
+        return row['user_id']
 
     def create_session(self, c, uid):
         token = secrets.token_urlsafe(32)
@@ -783,7 +846,7 @@ class App(SimpleHTTPRequestHandler):
             points = c.execute('SELECT points FROM PointBalances WHERE user_id=?', (uid,)).fetchone()
             member = c.execute('SELECT expires_at FROM Memberships WHERE user_id=?', (uid,)).fetchone()
             history = c.execute(
-                'SELECT item_type,item_name,wei_amount,points_added,member_days,created_at '
+                'SELECT item_type,item_name,wei_amount,points_added,cash_amount,member_days,created_at '
                 'FROM RechargeOrders WHERE user_id=? ORDER BY id DESC LIMIT 10',
                 (uid,),
             ).fetchall()
@@ -797,9 +860,76 @@ class App(SimpleHTTPRequestHandler):
                 'points': points['points'] if points else 0,
                 'member_expires_at': iso_z(member['expires_at']) if member else None,
                 'topup_available': admin or not bool(claimed),
+                'points_cash_rate': POINT_CASH_RATE,
                 'history': [
                     {**dict(item), 'created_at': iso_z(item['created_at'])} for item in history
                 ],
+            })
+            return
+
+        if path == '/api/admin/users':
+            if not uid:
+                self.send_json({'error': '请先登录'}, 401)
+                return
+            if not is_admin_user(c, uid):
+                self.send_json({'error': '仅管理员可以查看用户'}, 403)
+                return
+            rows = c.execute(
+                'SELECT id,username,email,is_admin,is_banned,created_at,last_seen_at FROM Users ORDER BY id'
+            ).fetchall()
+            users = []
+            for row in rows:
+                item = dict(row)
+                item['online'] = is_online(item['last_seen_at'])
+                item['last_seen_at'] = iso_z(item['last_seen_at']) if item['last_seen_at'] else None
+                item['created_at'] = iso_z(item['created_at'])
+                users.append(item)
+            self.send_json(users)
+            return
+
+        if path == '/api/admin/swaps':
+            if not uid:
+                self.send_json({'error': '请先登录'}, 401)
+                return
+            if not is_admin_user(c, uid):
+                self.send_json({'error': '仅管理员可以查看股票互换'}, 403)
+                return
+            rows = c.execute(
+                'SELECT s.*,fu.username AS from_username,tu.username AS to_username,'
+                'f.name AS from_name,t.name AS to_name '
+                'FROM StockSwaps s JOIN Users fu ON fu.id=s.from_user_id '
+                'JOIN Users tu ON tu.id=s.to_user_id '
+                'JOIN Stocks f ON f.code=s.from_code JOIN Stocks t ON t.code=s.to_code '
+                'ORDER BY s.id DESC LIMIT 100'
+            ).fetchall()
+            self.send_json([
+                {**dict(row), 'created_at': iso_z(row['created_at']),
+                 'responded_at': iso_z(row['responded_at']) if row['responded_at'] else None}
+                for row in rows
+            ])
+            return
+
+        if path == '/api/swaps':
+            if not uid:
+                self.send_json({'error': '请先登录'}, 401)
+                return
+            rows = c.execute(
+                'SELECT s.*,fu.username AS from_username,tu.username AS to_username,'
+                'f.name AS from_name,t.name AS to_name '
+                'FROM StockSwaps s JOIN Users fu ON fu.id=s.from_user_id '
+                'JOIN Users tu ON tu.id=s.to_user_id '
+                'JOIN Stocks f ON f.code=s.from_code JOIN Stocks t ON t.code=s.to_code '
+                'WHERE s.from_user_id=? OR s.to_user_id=? ORDER BY s.id DESC LIMIT 50',
+                (uid, uid),
+            ).fetchall()
+            items = [
+                {**dict(row), 'created_at': iso_z(row['created_at']),
+                 'responded_at': iso_z(row['responded_at']) if row['responded_at'] else None}
+                for row in rows
+            ]
+            self.send_json({
+                'incoming': [x for x in items if x['to_user_id'] == uid],
+                'outgoing': [x for x in items if x['from_user_id'] == uid],
             })
             return
 
@@ -1082,15 +1212,20 @@ class App(SimpleHTTPRequestHandler):
                     return
             else:
                 row = c.execute(
-                    'SELECT id,password FROM Users WHERE username=? OR email=?', (name, email or name.lower())
+                    'SELECT id,password,is_banned FROM Users WHERE username=? OR email=?', (name, email or name.lower())
                 ).fetchone()
                 if not row or not validpw(password, row['password']):
                     App.throttle.fail(key)
                     self.send_json({'error': '账号或密码错误'}, 401)
                     return
+                if row['is_banned']:
+                    App.throttle.fail(key)
+                    self.send_json({'error': '该账号已被管理员拉黑，无法登录'}, 403)
+                    return
                 new_uid = row['id']
             App.throttle.clear(key)
             token = self.create_session(c, new_uid)
+            c.execute('UPDATE Users SET last_seen_at=? WHERE id=?', (utcstamp(), new_uid))
             c.commit()
             self.send_json({'ok': True, 'token': token}, 200, self.session_headers(token))
             return
@@ -1107,6 +1242,12 @@ class App(SimpleHTTPRequestHandler):
 
         if not uid:
             self.send_json({'error': '请先登录'}, 401)
+            return
+
+        if path == '/api/heartbeat':
+            c.execute('UPDATE Users SET last_seen_at=? WHERE id=?', (utcstamp(), uid))
+            c.commit()
+            self.send_json({'ok': True, 'is_admin': is_admin_user(c, uid)})
             return
 
         if path == '/api/wallet/topup':
@@ -1129,6 +1270,35 @@ class App(SimpleHTTPRequestHandler):
                 self.send_json({'error': '今天的虚拟玮元补给已领取，请明天再来'}, 409)
                 return
             self.send_json({'ok': True, 'item_name': '每日练习补给', 'amount': 500})
+            return
+
+        if path == '/api/points/exchange':
+            try:
+                points = int(data.get('points', 0))
+            except (TypeError, ValueError):
+                points = 0
+            if points <= 0 or points > 1_000_000:
+                self.send_json({'error': '请输入有效的积分数量'}, 400)
+                return
+            balance = c.execute('SELECT points FROM PointBalances WHERE user_id=?', (uid,)).fetchone()
+            if not balance or balance['points'] < points:
+                self.send_json({'error': '积分不足'}, 400)
+                return
+            amount = Decimal(points * POINT_CASH_RATE)
+            c.execute('UPDATE PointBalances SET points=points-? WHERE user_id=?', (points, uid))
+            c.execute('UPDATE Accounts SET cash=cash+? WHERE user_id=?', (amount, uid))
+            c.execute(
+                "INSERT INTO RechargeOrders(user_id,item_type,item_name,wei_amount,points_added,cash_amount,member_days) "
+                "VALUES(?,'points_cash','积分兑换虚拟余额',0,?,?,0)",
+                (uid, -points, amount),
+            )
+            c.commit()
+            account = c.execute('SELECT cash FROM Accounts WHERE user_id=?', (uid,)).fetchone()
+            left = c.execute('SELECT points FROM PointBalances WHERE user_id=?', (uid,)).fetchone()
+            self.send_json({
+                'ok': True, 'points': left['points'], 'amount': money(amount),
+                'cash': money(account['cash']), 'rate': POINT_CASH_RATE,
+            })
             return
 
         if path == '/api/recharge':
@@ -1171,6 +1341,158 @@ class App(SimpleHTTPRequestHandler):
                 c.rollback()
                 raise
             self.send_json({'ok': True, 'item_name': item_name})
+            return
+
+        if path in ('/api/admin/users/kick', '/api/admin/users/ban'):
+            if not is_admin_user(c, uid):
+                self.send_json({'error': '仅管理员可以管理用户'}, 403)
+                return
+            try:
+                target_id = int(data.get('id', 0))
+            except (TypeError, ValueError):
+                target_id = 0
+            if not target_id or target_id == uid:
+                self.send_json({'error': '不能操作当前登录账号'}, 400)
+                return
+            target = c.execute(
+                'SELECT id,is_admin,is_banned FROM Users WHERE id=?', (target_id,)
+            ).fetchone()
+            if not target:
+                self.send_json({'error': '用户不存在'}, 404)
+                return
+            if target['is_admin']:
+                self.send_json({'error': '不能操作其他管理员'}, 400)
+                return
+            if path.endswith('/kick'):
+                c.execute('DELETE FROM Sessions WHERE user_id=?', (target_id,))
+                c.execute('UPDATE Users SET last_seen_at=NULL WHERE id=?', (target_id,))
+                c.commit()
+                self.send_json({'ok': True, 'action': 'kick'})
+                return
+            banned = bool(data.get('banned', True))
+            c.execute('UPDATE Users SET is_banned=? WHERE id=?', (1 if banned else 0, target_id))
+            if banned:
+                c.execute('DELETE FROM Sessions WHERE user_id=?', (target_id,))
+                c.execute('UPDATE Users SET last_seen_at=NULL WHERE id=?', (target_id,))
+            c.commit()
+            self.send_json({'ok': True, 'action': 'ban' if banned else 'unban', 'banned': banned})
+            return
+
+        if path == '/api/swaps':
+            to_username = str(data.get('to_username', '')).strip()
+            from_code = str(data.get('from_code', '')).strip()
+            to_code = str(data.get('to_code', '')).strip()
+            try:
+                from_quantity = int(data.get('from_quantity', 0))
+                to_quantity = int(data.get('to_quantity', 0))
+            except (TypeError, ValueError):
+                from_quantity = to_quantity = 0
+            if from_code == to_code:
+                self.send_json({'error': '互换的两只股票不能相同'}, 400)
+                return
+            if from_quantity <= 0 or to_quantity <= 0:
+                self.send_json({'error': '互换数量必须大于 0'}, 400)
+                return
+            target = c.execute(
+                'SELECT id,is_banned FROM Users WHERE username=?', (to_username,)
+            ).fetchone()
+            if not target:
+                self.send_json({'error': '找不到对方用户名'}, 404)
+                return
+            if target['id'] == uid:
+                self.send_json({'error': '不能和自己互换'}, 400)
+                return
+            if target['is_banned']:
+                self.send_json({'error': '对方账号已被拉黑'}, 400)
+                return
+            for code in (from_code, to_code):
+                if not c.execute('SELECT 1 FROM Stocks WHERE code=?', (code,)).fetchone():
+                    self.send_json({'error': '股票不存在'}, 404)
+                    return
+            holding = c.execute(
+                'SELECT quantity FROM Holdings WHERE user_id=? AND code=?', (uid, from_code)
+            ).fetchone()
+            if not holding or holding['quantity'] < from_quantity:
+                self.send_json({'error': '你持有的该股票数量不足'}, 400)
+                return
+            message = clean_text(data.get('message', ''), 0, 200)
+            if message is None:
+                self.send_json({'error': '留言包含不支持的字符或过长'}, 400)
+                return
+            cursor = c.execute(
+                'INSERT INTO StockSwaps(from_user_id,to_user_id,from_code,from_quantity,'
+                'to_code,to_quantity,message) VALUES(?,?,?,?,?,?,?)',
+                (uid, target['id'], from_code, from_quantity, to_code, to_quantity, message),
+            )
+            c.commit()
+            self.send_json({'ok': True, 'id': cursor.lastrowid})
+            return
+
+        if path in ('/api/swaps/accept', '/api/swaps/decline'):
+            try:
+                swap_id = int(data.get('id', 0))
+            except (TypeError, ValueError):
+                swap_id = 0
+            swap = c.execute('SELECT * FROM StockSwaps WHERE id=?', (swap_id,)).fetchone()
+            if not swap:
+                self.send_json({'error': '互换请求不存在'}, 404)
+                return
+            if uid not in (swap['from_user_id'], swap['to_user_id']):
+                self.send_json({'error': '无权操作该互换请求'}, 403)
+                return
+            if swap['status'] != 'pending':
+                self.send_json({'error': '该请求已经处理'}, 409)
+                return
+            if path.endswith('/decline'):
+                status = 'declined' if uid == swap['to_user_id'] else 'cancelled'
+                c.execute(
+                    "UPDATE StockSwaps SET status=?,responded_at=? WHERE id=?",
+                    (status, utcstamp(), swap_id),
+                )
+                c.commit()
+                self.send_json({'ok': True, 'status': status})
+                return
+            if uid != swap['to_user_id']:
+                self.send_json({'error': '只有接收方可以接受互换'}, 403)
+                return
+            from_stock = c.execute('SELECT price FROM Stocks WHERE code=?', (swap['from_code'],)).fetchone()
+            to_stock = c.execute('SELECT price FROM Stocks WHERE code=?', (swap['to_code'],)).fetchone()
+            if not from_stock or not to_stock:
+                self.send_json({'error': '股票数据不存在'}, 404)
+                return
+            from_holding = c.execute(
+                'SELECT quantity FROM Holdings WHERE user_id=? AND code=?',
+                (swap['from_user_id'], swap['from_code']),
+            ).fetchone()
+            to_holding = c.execute(
+                'SELECT quantity FROM Holdings WHERE user_id=? AND code=?',
+                (uid, swap['to_code']),
+            ).fetchone()
+            if not from_holding or from_holding['quantity'] < swap['from_quantity']:
+                self.send_json({'error': '发起方持仓不足，无法完成互换'}, 400)
+                return
+            if not to_holding or to_holding['quantity'] < swap['to_quantity']:
+                self.send_json({'error': '你的持仓不足，无法完成互换'}, 400)
+                return
+            try:
+                move_holding(
+                    c, swap['from_user_id'], uid, swap['from_code'],
+                    swap['from_quantity'], Decimal(str(from_stock['price'])),
+                )
+                move_holding(
+                    c, uid, swap['from_user_id'], swap['to_code'],
+                    swap['to_quantity'], Decimal(str(to_stock['price'])),
+                )
+                c.execute(
+                    "UPDATE StockSwaps SET status='accepted',responded_at=? WHERE id=?",
+                    (utcstamp(), swap_id),
+                )
+                c.commit()
+            except ValueError as error:
+                c.rollback()
+                self.send_json({'error': str(error)}, 400)
+                return
+            self.send_json({'ok': True, 'status': 'accepted'})
             return
 
         if path == '/api/trade':
