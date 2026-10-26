@@ -61,6 +61,21 @@ const isOnline = (lastSeen) => {
   return (Date.now() - parseUtc(lastSeen)) / 1000 <= ONLINE_WINDOW_SECONDS;
 };
 const isMemberActive = (expiresAt) => Boolean(expiresAt && parseUtc(expiresAt) > Date.now());
+const purgeUserStatements = (env, targetId, email) => {
+  const statements = [
+    env.DB.prepare("DELETE FROM StockSwaps WHERE from_user_id=? OR to_user_id=?").bind(targetId, targetId),
+  ];
+  for (const table of [
+    "GameStats", "MiningRuns", "ForgeRuns", "FishingDaily",
+    "WalletTopupClaims", "RechargeOrders", "Orders", "Holdings",
+    "Sessions", "Accounts", "Wallets", "PointBalances", "Memberships", "TradingPlans", "TradeJournal",
+  ]) {
+    statements.push(env.DB.prepare(`DELETE FROM ${table} WHERE user_id=?`).bind(targetId));
+  }
+  statements.push(env.DB.prepare("DELETE FROM EmailCodes WHERE email=?").bind(email));
+  statements.push(env.DB.prepare("DELETE FROM Users WHERE id=?").bind(targetId));
+  return statements;
+};
 async function holdingMoveStatements(env, fromUid, toUid, code, quantity, price) {
   const source = await env.DB.prepare("SELECT quantity FROM Holdings WHERE user_id=? AND code=?")
     .bind(fromUid, code)
@@ -443,6 +458,15 @@ async function handle(request, env) {
     return json({ ok: true, is_admin: await isAdmin(env, uid) });
   }
 
+  if (path === "/api/account/delete" && method === "POST") {
+    const row = await env.DB.prepare("SELECT email,password,is_admin FROM Users WHERE id=?").bind(uid).first();
+    if (!row) return bad("用户不存在", 404);
+    if (row.is_admin) return bad("管理员账号不能在这里注销");
+    if (!(await checkPassword(String(body.password || ""), row.password))) return bad("密码不正确，无法注销账号", 403);
+    await env.DB.batch(purgeUserStatements(env, uid, row.email));
+    return json({ ok: true }, 200, { "Set-Cookie": sessionCookie(null) });
+  }
+
   if (path === "/api/points/exchange" && method === "POST") {
     const points = Number(body.points);
     if (!Number.isInteger(points) || points <= 0 || points > 1000000) return bad("请输入有效的积分数量");
@@ -504,6 +528,24 @@ async function handle(request, env) {
         responded_at: row.responded_at ? isoZ(row.responded_at) : null,
       }))
     );
+  }
+
+  if (path === "/api/journal" && method === "GET") {
+    const rows = await env.DB.prepare(
+      "SELECT id,phase,content,created_at FROM TradeJournal WHERE user_id=? ORDER BY id DESC LIMIT 20"
+    ).bind(uid).all();
+    return json((rows.results || []).map((row) => ({
+      id: row.id, phase: row.phase, content: row.content, created_at: row.created_at,
+    })));
+  }
+
+  if (path === "/api/plan" && method === "GET") {
+    const row = await env.DB.prepare("SELECT note,max_loss,updated_at FROM TradingPlans WHERE user_id=?").bind(uid).first();
+    return json({
+      note: row?.note || "",
+      max_loss: row?.max_loss == null ? null : Number(row.max_loss),
+      updated_at: row?.updated_at || null,
+    });
   }
 
   if (path === "/api/swaps" && method === "GET") {
@@ -858,19 +900,7 @@ async function handle(request, env) {
     if (!target) return bad("用户不存在", 404);
     if (target.is_admin) return bad("不能操作其他管理员");
     if (path.endsWith("/delete")) {
-      const statements = [
-        env.DB.prepare("DELETE FROM StockSwaps WHERE from_user_id=? OR to_user_id=?").bind(targetId, targetId),
-      ];
-      for (const table of [
-        "GameStats", "MiningRuns", "ForgeRuns", "FishingDaily",
-        "WalletTopupClaims", "RechargeOrders", "Orders", "Holdings",
-        "Sessions", "Accounts", "Wallets", "PointBalances", "Memberships",
-      ]) {
-        statements.push(env.DB.prepare(`DELETE FROM ${table} WHERE user_id=?`).bind(targetId));
-      }
-      statements.push(env.DB.prepare("DELETE FROM EmailCodes WHERE email=?").bind(target.email));
-      statements.push(env.DB.prepare("DELETE FROM Users WHERE id=?").bind(targetId));
-      await env.DB.batch(statements);
+      await env.DB.batch(purgeUserStatements(env, targetId, target.email));
       return json({ ok: true, action: "delete" });
     }
     const banned = body.banned !== false;
@@ -883,6 +913,36 @@ async function handle(request, env) {
     }
     await env.DB.batch(statements);
     return json({ ok: true, action: banned ? "ban" : "unban", banned });
+  }
+
+  if (path === "/api/journal" && method === "POST") {
+    const content = cleanText(body.content || "", 1, 500);
+    if (!content) return bad("请写下一点交易心得（500 字以内）");
+    const createdAt = new Date().toISOString();
+    const result = await env.DB.prepare(
+      "INSERT INTO TradeJournal(user_id,phase,content,created_at) VALUES(?,?,?,?)"
+    ).bind(uid, "note", content, createdAt).run();
+    return json({ ok: true, entry: { id: result.meta.last_row_id, content, created_at: createdAt } });
+  }
+
+  if (path === "/api/plan" && method === "POST") {
+    const note = cleanText(body.note || "", 0, 300);
+    if (note === null) return bad("计划内容不能包含尖括号或控制字符");
+    let maxLoss = null;
+    if (body.max_loss !== null && body.max_loss !== undefined && String(body.max_loss).trim() !== "") {
+      maxLoss = Number(body.max_loss);
+      if (!Number.isFinite(maxLoss) || maxLoss < 0 || maxLoss > 100) return bad("最大可接受亏损需在 0–100 之间");
+    }
+    if (!note && maxLoss === null) {
+      await env.DB.prepare("DELETE FROM TradingPlans WHERE user_id=?").bind(uid).run();
+      return json({ ok: true, note: "", max_loss: null, updated_at: null });
+    }
+    const updatedAt = new Date().toISOString();
+    await env.DB.prepare(
+      "INSERT INTO TradingPlans(user_id,note,max_loss,updated_at) VALUES(?,?,?,?) " +
+        "ON CONFLICT(user_id) DO UPDATE SET note=excluded.note,max_loss=excluded.max_loss,updated_at=excluded.updated_at"
+    ).bind(uid, note, maxLoss, updatedAt).run();
+    return json({ ok: true, note, max_loss: maxLoss, updated_at: updatedAt });
   }
 
   if (path === "/api/swaps" && method === "POST") {

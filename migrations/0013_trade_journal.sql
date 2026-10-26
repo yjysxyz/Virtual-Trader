@@ -1,0 +1,11 @@
+CREATE TABLE IF NOT EXISTS TradeJournal(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  phase TEXT NOT NULL DEFAULT 'note',
+  content TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(user_id) REFERENCES Users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_trade_journal_user
+  ON TradeJournal(user_id, created_at DESC);

@@ -15,7 +15,7 @@
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, unquote
 from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 import hashlib
 import hmac
 import html
@@ -146,6 +146,15 @@ SCHEMA = (
     "FOREIGN KEY(to_user_id) REFERENCES Users(id) ON DELETE CASCADE,"
     "FOREIGN KEY(from_code) REFERENCES Stocks(code),"
     "FOREIGN KEY(to_code) REFERENCES Stocks(code))",
+    "CREATE TABLE IF NOT EXISTS TradingPlans(user_id INTEGER PRIMARY KEY,"
+    "note TEXT NOT NULL DEFAULT '',max_loss NUMERIC,"
+    "updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+    "FOREIGN KEY(user_id) REFERENCES Users(id) ON DELETE CASCADE)",
+    "CREATE TABLE IF NOT EXISTS TradeJournal(id INTEGER PRIMARY KEY AUTOINCREMENT,"
+    "user_id INTEGER NOT NULL,phase TEXT NOT NULL DEFAULT 'note',"
+    "content TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+    "FOREIGN KEY(user_id) REFERENCES Users(id) ON DELETE CASCADE)",
+    "CREATE INDEX IF NOT EXISTS idx_trade_journal_user ON TradeJournal(user_id,created_at DESC)",
     "CREATE TABLE IF NOT EXISTS WalletTopupClaims(user_id INTEGER NOT NULL,"
     "claim_day TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,"
     "PRIMARY KEY(user_id,claim_day),"
@@ -451,6 +460,21 @@ def is_member_active(value):
         return parse_utc(value) > utcnow()
     except (TypeError, ValueError):
         return False
+
+
+def purge_user(c, target_id, email):
+    c.execute(
+        'DELETE FROM StockSwaps WHERE from_user_id=? OR to_user_id=?',
+        (target_id, target_id),
+    )
+    for table in (
+        'GameStats', 'MiningRuns', 'ForgeRuns', 'FishingDaily',
+        'WalletTopupClaims', 'RechargeOrders', 'Orders', 'Holdings',
+        'Sessions', 'Accounts', 'Wallets', 'PointBalances', 'Memberships', 'TradingPlans', 'TradeJournal',
+    ):
+        c.execute(f'DELETE FROM {table} WHERE user_id=?', (target_id,))
+    c.execute('DELETE FROM EmailCodes WHERE email=?', (email,))
+    c.execute('DELETE FROM Users WHERE id=?', (target_id,))
 
 
 def move_holding(c, from_uid, to_uid, code, quantity, price):
@@ -921,6 +945,34 @@ class App(SimpleHTTPRequestHandler):
             ])
             return
 
+        if path == '/api/journal':
+            if not uid:
+                self.send_json({'error': '请先登录'}, 401)
+                return
+            rows = c.execute(
+                'SELECT id,phase,content,created_at FROM TradeJournal WHERE user_id=? '
+                'ORDER BY id DESC LIMIT 20', (uid,)
+            ).fetchall()
+            self.send_json([{
+                'id': row['id'], 'phase': row['phase'], 'content': row['content'],
+                'created_at': iso_z(row['created_at']),
+            } for row in rows])
+            return
+
+        if path == '/api/plan':
+            if not uid:
+                self.send_json({'error': '请先登录'}, 401)
+                return
+            row = c.execute(
+                'SELECT note,max_loss,updated_at FROM TradingPlans WHERE user_id=?', (uid,)
+            ).fetchone()
+            self.send_json({
+                'note': row['note'] if row else '',
+                'max_loss': float(row['max_loss']) if row and row['max_loss'] is not None else None,
+                'updated_at': iso_z(row['updated_at']) if row and row['updated_at'] else None,
+            })
+            return
+
         if path == '/api/swaps':
             if not uid:
                 self.send_json({'error': '请先登录'}, 401)
@@ -1262,6 +1314,25 @@ class App(SimpleHTTPRequestHandler):
             self.send_json({'ok': True, 'is_admin': is_admin_user(c, uid)})
             return
 
+        if path == '/api/account/delete':
+            row = c.execute(
+                'SELECT email,password,is_admin FROM Users WHERE id=?', (uid,)
+            ).fetchone()
+            if not row:
+                self.send_json({'error': '用户不存在'}, 404)
+                return
+            if row['is_admin']:
+                self.send_json({'error': '管理员账号不能在这里注销'}, 400)
+                return
+            password = str(data.get('password', ''))
+            if not validpw(password, row['password']):
+                self.send_json({'error': '密码不正确，无法注销账号'}, 403)
+                return
+            purge_user(c, uid, row['email'])
+            c.commit()
+            self.send_json({'ok': True}, 200, self.session_headers())
+            return
+
         if path == '/api/wallet/topup':
             admin = is_admin_user(c, uid)
             try:
@@ -1380,18 +1451,7 @@ class App(SimpleHTTPRequestHandler):
                 self.send_json({'error': '不能操作其他管理员'}, 400)
                 return
             if path.endswith('/delete'):
-                c.execute(
-                    'DELETE FROM StockSwaps WHERE from_user_id=? OR to_user_id=?',
-                    (target_id, target_id),
-                )
-                for table in (
-                    'GameStats', 'MiningRuns', 'ForgeRuns', 'FishingDaily',
-                    'WalletTopupClaims', 'RechargeOrders', 'Orders', 'Holdings',
-                    'Sessions', 'Accounts', 'Wallets', 'PointBalances', 'Memberships',
-                ):
-                    c.execute(f'DELETE FROM {table} WHERE user_id=?', (target_id,))
-                c.execute('DELETE FROM EmailCodes WHERE email=?', (target['email'],))
-                c.execute('DELETE FROM Users WHERE id=?', (target_id,))
+                purge_user(c, target_id, target['email'])
                 c.commit()
                 self.send_json({'ok': True, 'action': 'delete'})
                 return
@@ -1402,6 +1462,63 @@ class App(SimpleHTTPRequestHandler):
                 c.execute('UPDATE Users SET last_seen_at=NULL WHERE id=?', (target_id,))
             c.commit()
             self.send_json({'ok': True, 'action': 'ban' if banned else 'unban', 'banned': banned})
+            return
+
+        if path == '/api/journal':
+            content = clean_text(data.get('content', ''), 1, 500)
+            if not content:
+                self.send_json({'error': '请写下一点交易心得（500 字以内）'}, 400)
+                return
+            cur = c.execute(
+                'INSERT INTO TradeJournal(user_id,phase,content,created_at) VALUES(?,?,?,?)',
+                (uid, 'note', content, utcstamp()),
+            )
+            c.commit()
+            row = c.execute(
+                'SELECT id,phase,content,created_at FROM TradeJournal WHERE id=?',
+                (cur.lastrowid,),
+            ).fetchone()
+            self.send_json({
+                'ok': True, 'entry': {
+                    'id': row['id'], 'phase': row['phase'],
+                    'content': row['content'], 'created_at': iso_z(row['created_at']),
+                },
+            })
+            return
+
+        if path == '/api/plan':
+            note = clean_text(data.get('note', ''), 0, 300)
+            if note is None:
+                self.send_json({'error': '计划内容不能包含尖括号或控制字符'}, 400)
+                return
+            raw_loss = data.get('max_loss')
+            max_loss = None
+            if raw_loss not in (None, ''):
+                try:
+                    max_loss = Decimal(str(raw_loss))
+                except (InvalidOperation, TypeError, ValueError):
+                    max_loss = None
+                if max_loss is None or max_loss < 0 or max_loss > 100:
+                    self.send_json({'error': '最大可接受亏损需在 0–100 之间'}, 400)
+                    return
+            if not note and max_loss is None:
+                c.execute('DELETE FROM TradingPlans WHERE user_id=?', (uid,))
+                c.commit()
+                self.send_json({'ok': True, 'note': '', 'max_loss': None, 'updated_at': None})
+                return
+            updated = utcstamp()
+            c.execute(
+                'INSERT INTO TradingPlans(user_id,note,max_loss,updated_at) VALUES(?,?,?,?) '
+                'ON CONFLICT(user_id) DO UPDATE SET note=excluded.note,'
+                'max_loss=excluded.max_loss,updated_at=excluded.updated_at',
+                (uid, note, float(max_loss) if max_loss is not None else None, updated),
+            )
+            c.commit()
+            self.send_json({
+                'ok': True, 'note': note,
+                'max_loss': float(max_loss) if max_loss is not None else None,
+                'updated_at': iso_z(updated),
+            })
             return
 
         if path == '/api/swaps':
