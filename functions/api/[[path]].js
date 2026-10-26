@@ -1064,9 +1064,9 @@ async function handle(request, env) {
 
   if (path === "/api/recharge" && method === "POST") {
     const catalog = {
-      points_100: ["points", "100 积分", 100, 100, 0],
-      points_500: ["points", "500 积分", 500, 500, 0],
-      points_1000: ["points", "1000 积分", 1000, 1000, 0],
+      points_100: ["points", "100 积分", 10, 100, 0],
+      points_500: ["points", "500 积分", 50, 500, 0],
+      points_1000: ["points", "1000 积分", 100, 1000, 0],
       member_7: ["member", "体验会员 7 天", 300, 0, 7],
       member_30: ["member", "体验会员 30 天", 1000, 0, 30],
       member_90: ["member", "体验会员 90 天", 2000, 0, 90],
