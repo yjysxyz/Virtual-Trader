@@ -444,6 +444,15 @@ def is_online(value):
         return False
 
 
+def is_member_active(value):
+    if not value:
+        return False
+    try:
+        return parse_utc(value) > utcnow()
+    except (TypeError, ValueError):
+        return False
+
+
 def move_holding(c, from_uid, to_uid, code, quantity, price):
     """把股票从 from_uid 转到 to_uid；接收方按当前模拟价加权成本。"""
     source = c.execute(
@@ -855,12 +864,15 @@ class App(SimpleHTTPRequestHandler):
                 (uid, today_local()),
             ).fetchone()
             admin = is_admin_user(c, uid)
+            member_active = is_member_active(member['expires_at'] if member else None)
+            points_rate = Decimal(POINT_CASH_RATE) * (Decimal('1.1') if member_active else Decimal('1'))
             self.send_json({
                 'balance': money(wallet['balance']) if wallet else 0,
                 'points': points['points'] if points else 0,
                 'member_expires_at': iso_z(member['expires_at']) if member else None,
                 'topup_available': admin or not bool(claimed),
-                'points_cash_rate': POINT_CASH_RATE,
+                'points_cash_rate': float(points_rate),
+                'member_cash_bonus': 0.1 if member_active else 0,
                 'history': [
                     {**dict(item), 'created_at': iso_z(item['created_at'])} for item in history
                 ],
@@ -1284,7 +1296,10 @@ class App(SimpleHTTPRequestHandler):
             if not balance or balance['points'] < points:
                 self.send_json({'error': '积分不足'}, 400)
                 return
-            amount = Decimal(points * POINT_CASH_RATE)
+            member = c.execute('SELECT expires_at FROM Memberships WHERE user_id=?', (uid,)).fetchone()
+            member_active = is_member_active(member['expires_at'] if member else None)
+            rate = Decimal(POINT_CASH_RATE) * (Decimal('1.1') if member_active else Decimal('1'))
+            amount = Decimal(points) * rate
             c.execute('UPDATE PointBalances SET points=points-? WHERE user_id=?', (points, uid))
             c.execute('UPDATE Accounts SET cash=cash+? WHERE user_id=?', (amount, uid))
             c.execute(
@@ -1297,7 +1312,8 @@ class App(SimpleHTTPRequestHandler):
             left = c.execute('SELECT points FROM PointBalances WHERE user_id=?', (uid,)).fetchone()
             self.send_json({
                 'ok': True, 'points': left['points'], 'amount': money(amount),
-                'cash': money(account['cash']), 'rate': POINT_CASH_RATE,
+                'cash': money(account['cash']), 'rate': float(rate),
+                'member_bonus': 0.1 if member_active else 0,
             })
             return
 

@@ -27,9 +27,11 @@
 .points-cash-info b,.points-cash-info small{display:block}
 .points-cash-info b{font-size:11px;color:#5d563c}
 .points-cash-info small{font-size:9px;color:#95876a;margin-top:4px;line-height:1.5}
-.points-cash-form{display:flex;gap:6px}
-.points-cash-form input{width:88px;height:32px;border:1px solid #e3d7bc;background:#fff;padding:0 8px;font:11px inherit;color:#4b553f}
-.points-cash-form button{height:32px;padding:0 9px;white-space:nowrap}
+.points-cash-form{display:flex;align-items:center;gap:8px}
+.points-cash-form label{display:flex;align-items:center;height:34px;margin:0;font-size:10px;color:#7f7158;line-height:1;white-space:nowrap}
+.points-cash-form input{display:block;width:104px;height:34px;margin:0;border:1px solid #e3d7bc;background:#fff;padding:0 9px;font:11px inherit;color:#4b553f;text-align:center;box-sizing:border-box}
+.points-cash-form button{display:inline-flex;align-items:center;justify-content:center;height:34px;margin:0;padding:0 10px;white-space:nowrap;box-sizing:border-box}
+.points-cash-hint{grid-column:1/-1;font-size:9px;color:#95876a;line-height:1.5;margin-top:-2px}
 .points-cash .message{grid-column:1/-1;min-height:0;margin:0}
 
 /* 股票互换 */
@@ -65,4 +67,15 @@
 .online-no{color:#a6afa8}
 .banned-yes{color:#a95c50;font-weight:600}
 @media(max-width:600px){.swap-grid{grid-template-columns:1fr}.points-cash{grid-template-columns:1fr}.points-cash-form input{flex:1;width:auto}}
+
+/* 顶栏与管理员工具条 */
+.top{height:auto;min-height:76px;padding-top:10px;padding-bottom:10px;flex-wrap:wrap;gap:10px}
+.brand{flex:0 0 auto}
+.top-right{flex-wrap:wrap;justify-content:flex-end;gap:10px}
+.top-right .outline,.top-right .repo-link{white-space:nowrap;flex:0 0 auto}
+.admin-bar{display:flex;align-items:center;gap:10px;padding:8px max(calc((100vw - 1160px)/2),5.5%);border-bottom:1px solid var(--line);background:#fbf8ee;flex-wrap:wrap}
+.admin-bar>span{font-size:10px;font-weight:700;letter-spacing:.1em;color:#8a641f}
+.admin-bar .outline{padding:6px 10px;font-size:10px;white-space:nowrap}
+.points-cash-form label{font-size:9px;color:#8a7a5a;white-space:nowrap;align-self:center}
+@media(max-width:800px){.top{height:auto;min-height:67px;padding-top:8px;padding-bottom:8px}.admin-bar{padding-left:17px;padding-right:17px}}
 .repo-link{text-decoration:none;white-space:nowrap}

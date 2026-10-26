@@ -60,6 +60,7 @@ const isOnline = (lastSeen) => {
   if (!lastSeen) return false;
   return (Date.now() - parseUtc(lastSeen)) / 1000 <= ONLINE_WINDOW_SECONDS;
 };
+const isMemberActive = (expiresAt) => Boolean(expiresAt && parseUtc(expiresAt) > Date.now());
 async function holdingMoveStatements(env, fromUid, toUid, code, quantity, price) {
   const source = await env.DB.prepare("SELECT quantity FROM Holdings WHERE user_id=? AND code=?")
     .bind(fromUid, code)
@@ -431,7 +432,8 @@ async function handle(request, env) {
       points: points?.points || 0,
       member_expires_at: isoZ(member?.expires_at),
       topup_available: admin || !claim,
-      points_cash_rate: POINT_CASH_RATE,
+      points_cash_rate: POINT_CASH_RATE * (isMemberActive(member?.expires_at) ? 1.1 : 1),
+      member_cash_bonus: isMemberActive(member?.expires_at) ? 0.1 : 0,
       history: historyRows.results.map((row) => ({ ...row, created_at: isoZ(row.created_at) })),
     });
   }
@@ -446,7 +448,10 @@ async function handle(request, env) {
     if (!Number.isInteger(points) || points <= 0 || points > 1000000) return bad("请输入有效的积分数量");
     const balance = await env.DB.prepare("SELECT points FROM PointBalances WHERE user_id=?").bind(uid).first();
     if (!balance || Number(balance.points) < points) return bad("积分不足");
-    const amount = money(points * POINT_CASH_RATE);
+    const member = await env.DB.prepare("SELECT expires_at FROM Memberships WHERE user_id=?").bind(uid).first();
+    const memberBonus = isMemberActive(member?.expires_at);
+    const rate = POINT_CASH_RATE * (memberBonus ? 1.1 : 1);
+    const amount = money(points * rate);
     await env.DB.batch([
       env.DB.prepare("UPDATE PointBalances SET points=points-? WHERE user_id=?").bind(points, uid),
       env.DB.prepare("UPDATE Accounts SET cash=cash+? WHERE user_id=?").bind(amount, uid),
@@ -457,7 +462,10 @@ async function handle(request, env) {
     ]);
     const account = await env.DB.prepare("SELECT cash FROM Accounts WHERE user_id=?").bind(uid).first();
     const left = await env.DB.prepare("SELECT points FROM PointBalances WHERE user_id=?").bind(uid).first();
-    return json({ ok: true, points: left?.points || 0, amount, cash: money(account?.cash), rate: POINT_CASH_RATE });
+    return json({
+      ok: true, points: left?.points || 0, amount, cash: money(account?.cash),
+      rate, member_bonus: memberBonus ? 0.1 : 0,
+    });
   }
 
   if (path === "/api/admin/users" && method === "GET") {
