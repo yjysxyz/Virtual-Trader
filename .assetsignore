@@ -25,3 +25,7 @@ market_sim_from_mysql.db
 __pycache__/
 *.py
 *.pyc
+.deploy-tools/
+.npm-cache/
+.pnpm-home/
+.cache/
